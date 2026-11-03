@@ -21,7 +21,7 @@ class _FakeProcess:
     def __init__(
         self,
         command: list[str],
-        returncode: int = 0,
+        returncode: int | None = 0,
         stdout: str = "",
         stderr: str = "",
         create_output: Path | None = None,
@@ -39,6 +39,8 @@ class _FakeProcess:
 
     def wait(self, timeout: float | None = None) -> int:
         self.waited = True
+        if self.returncode is None:
+            self.returncode = 0
         return self.poll() or 0
 
     def kill(self) -> None:
@@ -255,6 +257,27 @@ def test_transcribe_cancellation_kills_process_and_removes_partial_output(
             cancel_event=cancellation,
             progress_callback=cancel_after_start,
         )
+
+    assert process.killed
+    assert process.waited
+    assert not output_path.exists()
+
+
+def test_transcribe_keyboard_interrupt_kills_process_and_removes_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_path = tmp_path / "input.mp3"
+    output_path = tmp_path / "output.mid"
+    input_path.write_bytes(b"audio")
+    process = _FakeProcess([], returncode=None, create_output=output_path)
+    _setup_runner(monkeypatch, process)
+
+    def interrupt(_message: str) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        transcribe(input_path, output_path, progress_callback=interrupt)
 
     assert process.killed
     assert process.waited

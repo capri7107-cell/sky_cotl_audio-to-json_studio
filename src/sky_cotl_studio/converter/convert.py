@@ -5,9 +5,13 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
-from sky_cotl_studio.converter.chords import limit_chord_size, merge_close_onsets
+from sky_cotl_studio.converter.chords import (
+    deduplicate_notes,
+    limit_chord_size,
+    merge_close_onsets,
+)
 from sky_cotl_studio.converter.config import ConverterConfig
-from sky_cotl_studio.converter.grid import quantize
+from sky_cotl_studio.converter.grid import estimate_lattice, quantize_lattice
 from sky_cotl_studio.converter.mapping import MappingWarning, pitch_to_key
 from sky_cotl_studio.converter.transpose import best_transpose
 from sky_cotl_studio.models import Note, SkyNote
@@ -19,6 +23,8 @@ class ConversionStats:
 
     input_note_count: int
     merged_onset_count: int
+    deduplicated_count: int
+    chord_trimmed_count: int
     output_note_count: int
     distinct_time_count: int
     max_chord_size: int
@@ -53,6 +59,8 @@ def convert(
         stats = ConversionStats(
             input_note_count=0,
             merged_onset_count=0,
+            deduplicated_count=0,
+            chord_trimmed_count=0,
             output_note_count=0,
             distinct_time_count=0,
             max_chord_size=0,
@@ -62,10 +70,26 @@ def convert(
         return ConversionResult([], 0, converter_config.grid_ms, [], stats)
 
     earliest_onset = min(note.time_ms for note in merged_notes)
+    if converter_config.grid_mode == "auto":
+        distinct_onsets = {note.time_ms for note in merged_notes}
+        if len(distinct_onsets) < 2:
+            grid_ms, phase_ms = converter_config.grid_ms, 0.0
+        else:
+            grid_ms, phase_ms = estimate_lattice(
+                [note.time_ms - earliest_onset for note in merged_notes]
+            )
+    else:
+        grid_ms, phase_ms = converter_config.grid_ms, 0.0
     normalized_notes = [
         replace(
             note,
-            time_ms=float(quantize(note.time_ms - earliest_onset, converter_config.grid_ms)),
+            time_ms=float(
+                quantize_lattice(
+                    note.time_ms - earliest_onset,
+                    grid_ms,
+                    phase_ms,
+                )
+            ),
         )
         for note in merged_notes
     ]
@@ -85,11 +109,14 @@ def convert(
                 out_of_scale_count += 1
                 warnings.append(warning)
 
-    final_notes = limit_chord_size(sky_notes, converter_config.max_chord)
+    unique_sky_notes = deduplicate_notes(sky_notes)
+    final_notes = limit_chord_size(unique_sky_notes, converter_config.max_chord)
     chord_sizes = Counter(note.time_ms for note in final_notes)
     stats = ConversionStats(
         input_note_count=len(notes),
         merged_onset_count=len({note.time_ms for note in merged_notes}),
+        deduplicated_count=len(sky_notes) - len(unique_sky_notes),
+        chord_trimmed_count=len(unique_sky_notes) - len(final_notes),
         output_note_count=len(final_notes),
         distinct_time_count=len(chord_sizes),
         max_chord_size=max(chord_sizes.values(), default=0),
@@ -99,7 +126,7 @@ def convert(
     return ConversionResult(
         sky_notes=final_notes,
         transpose=transpose,
-        grid_ms=converter_config.grid_ms,
+        grid_ms=grid_ms,
         warnings=warnings,
         stats=stats,
     )

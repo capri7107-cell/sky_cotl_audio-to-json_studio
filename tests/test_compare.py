@@ -1,5 +1,9 @@
 from sky_cotl_studio.models import SkyNote
-from tools.compare import compare_notes
+from tools.compare import compare_notes, run_fixture_comparison
+
+
+def test_auto_conversion_preserves_fixture_comparison_score() -> None:
+    assert run_fixture_comparison().f1 >= 0.88
 
 
 def test_align_notes_finds_grid_offset_with_most_matching_onsets() -> None:

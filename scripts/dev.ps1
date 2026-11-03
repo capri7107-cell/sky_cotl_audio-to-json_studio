@@ -1,11 +1,13 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare")]
+    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3")]
     [string]$Task,
     [Parameter(Position = 1)]
     [string]$InputPath,
     [Parameter(Position = 2)]
     [string]$OutputPath,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ExtraArguments,
     [switch]$Fix
 )
 
@@ -82,9 +84,23 @@ switch ($Task) {
         if (-not $InputPath -or -not $OutputPath) {
             throw "convert requires an input MIDI path and an output JSON path."
         }
-        Invoke-PythonScript @("scripts/convert_midi.py", $InputPath, $OutputPath)
+        $convertArguments = @("scripts/convert_midi.py", $InputPath, $OutputPath)
+        if ($ExtraArguments) {
+            $convertArguments += $ExtraArguments
+        }
+        Invoke-PythonScript $convertArguments
     }
     "compare" {
         Invoke-PythonScript @("tools/compare.py")
+    }
+    "mp3" {
+        if (-not $InputPath -or -not $OutputPath) {
+            throw "mp3 requires an input MP3 path and an output JSON path."
+        }
+        $mp3Arguments = @("scripts/mp3_to_json.py", $InputPath, $OutputPath)
+        if ($ExtraArguments) {
+            $mp3Arguments += $ExtraArguments
+        }
+        Invoke-PythonScript $mp3Arguments
     }
 }

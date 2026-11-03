@@ -2,6 +2,7 @@
 
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -11,8 +12,11 @@ class ConverterConfig:
     grid_ms: float = 120
     merge_ms: float = 40
     max_chord: int = 4
+    grid_mode: Literal["auto", "fixed"] = "auto"
 
     def __post_init__(self) -> None:
+        if self.grid_mode not in ("auto", "fixed"):
+            raise ValueError("grid_mode must be 'auto' or 'fixed'")
         if (
             isinstance(self.grid_ms, bool)
             or not isinstance(self.grid_ms, (int, float))

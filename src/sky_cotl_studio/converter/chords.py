@@ -45,10 +45,7 @@ def limit_chord_size(notes: Sequence[SkyNote], max_chord: int) -> list[SkyNote]:
     if not isinstance(max_chord, int) or isinstance(max_chord, bool) or max_chord < 2:
         raise ValueError("max_chord must be an integer of at least 2")
 
-    unique_notes = sorted(
-        set(notes),
-        key=lambda note: (note.time_ms, note.key),
-    )
+    unique_notes = deduplicate_notes(notes)
     by_time: dict[int, list[SkyNote]] = {}
     for note in unique_notes:
         by_time.setdefault(note.time_ms, []).append(note)
@@ -68,3 +65,8 @@ def limit_chord_size(notes: Sequence[SkyNote], max_chord: int) -> list[SkyNote]:
         limited.extend(selected)
 
     return sorted(limited, key=lambda note: (note.time_ms, note.key))
+
+
+def deduplicate_notes(notes: Sequence[SkyNote]) -> list[SkyNote]:
+    """Keep one note per (time, key) pair and return notes in stable order."""
+    return sorted(set(notes), key=lambda note: (note.time_ms, note.key))

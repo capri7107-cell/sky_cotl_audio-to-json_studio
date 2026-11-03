@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from sky_cotl_studio.converter.grid import estimate_grid, quantize
+from sky_cotl_studio.converter.grid import estimate_grid, quantize, quantize_lattice
 from sky_cotl_studio.midi.reader import read_notes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +32,11 @@ def test_quantize_rounds_to_nearest_grid(
     expected: int,
 ) -> None:
     assert quantize(time_ms, grid_ms) == expected
+
+
+def test_quantize_lattice_uses_phase_and_rounds_only_final_time() -> None:
+    assert quantize_lattice(100.0, 187.2, 5.0) == 187
+    assert quantize_lattice(374.0, 187.2, 5.0) == 374
 
 
 @pytest.mark.parametrize("onsets", [[], [10.0]])

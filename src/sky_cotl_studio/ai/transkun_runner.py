@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, TextIO
 
-from sky_cotl_studio.audio.validate import validate_mp3
+from sky_cotl_studio.audio.validate import AudioInfo, validate_mp3
 
 Device = Literal["cpu", "cuda"]
 ProgressCallback = Callable[[str], None]
@@ -52,6 +52,7 @@ def transcribe(
     device: Device | None = None,
     progress_callback: ProgressCallback | None = None,
     cancel_event: threading.Event | None = None,
+    validated_audio: AudioInfo | None = None,
 ) -> Path:
     """Validate an MP3 and transcribe it to MIDI in a cancellable subprocess."""
     source = Path(input_path)
@@ -64,8 +65,11 @@ def transcribe(
     if cancel_event is not None and cancel_event.is_set():
         raise TranskunCancelledError("Transkun transcription was cancelled before it started")
 
-    validate_mp3(source)
-    selected_device = device if device is not None else _default_device()
+    if validated_audio is None:
+        validate_mp3(source)
+    elif not isinstance(validated_audio, AudioInfo):
+        raise TypeError("validated_audio must be an AudioInfo instance")
+    selected_device = resolve_device(device)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_output = _temporary_output_path(destination)
 
@@ -85,7 +89,7 @@ def transcribe(
                 f"Transkun exited successfully but did not create a MIDI output: {destination}"
             )
         os.replace(temporary_output, destination)
-    except Exception:
+    except BaseException:
         _remove_partial_output(temporary_output)
         raise
 
@@ -94,8 +98,11 @@ def transcribe(
     return destination
 
 
-def _default_device() -> Device:
-    return "cuda" if _cuda_available() else "cpu"
+def resolve_device(device: Device | None = None) -> Device:
+    """Resolve an explicit device or select CUDA when it is available."""
+    if device not in (None, "cpu", "cuda"):
+        raise ValueError("device must be 'cpu', 'cuda', or None")
+    return device if device is not None else ("cuda" if _cuda_available() else "cpu")
 
 
 def _cuda_available() -> bool:
@@ -189,7 +196,7 @@ def _run_transkun(
             raise TranskunProcessError(
                 f"Transkun exited with code {return_code}. Stderr tail:\n{detail}"
             )
-    except Exception:
+    except BaseException:
         if process.poll() is None:
             process.kill()
             process.wait()

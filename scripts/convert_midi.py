@@ -15,12 +15,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("midi_path", type=Path)
     parser.add_argument("json_path", type=Path)
+    defaults = ConverterConfig()
+    parser.add_argument("--grid-mode", choices=("auto", "fixed"), default="auto")
+    parser.add_argument("--grid-ms", type=float, default=defaults.grid_ms)
     args = parser.parse_args()
 
     midi_path: Path = args.midi_path
     json_path: Path = args.json_path
+    config = ConverterConfig(grid_mode=args.grid_mode, grid_ms=args.grid_ms)
     midi_notes = read_notes(midi_path)
-    result = convert(midi_notes, ConverterConfig())
+    result = convert(midi_notes, config)
     metadata = SongMeta(
         name=midi_path.stem,
         author="",
@@ -35,6 +39,7 @@ def main() -> None:
     json_path.write_text(export(metadata, result.sky_notes), encoding="utf-8")
     print(f"Input MIDI notes: {result.stats.input_note_count}")
     print(f"Transpose: {result.transpose}")
+    print(f"Grid mode: {config.grid_mode}")
     print(f"Grid: {result.grid_ms:g} ms")
     print(f"Output notes: {result.stats.output_note_count}")
     print(f"Distinct onset times: {result.stats.distinct_time_count}")
