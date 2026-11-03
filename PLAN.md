@@ -9,7 +9,8 @@ Thứ tự đi từ dưới lên: các phần kiểm chứng được bằng `fi
 - Format 1, 960 ticks/beat, 2 track. Track 0 chỉ có meta tempo (500000 µs/beat = 120 BPM mặc định) và 4/4.
 - Track 1: 650 note-on, kênh 0, pitch 40–83, velocity khoảng 80–98.
 - Nốt đầu tại tick 12041 (≈ 6,27 s). Nốt cuối khoảng 163 s.
-- Onset lệch kiểu người chơi (khoảng cách 458–463 ticks, ≈ 240 ms).
+- Onset gần như nằm đúng lưới 120 ms, không phản ánh timing của Transkun thật
+  (khoảng cách 458–463 ticks, ≈ 240 ms).
 
 **`fixtures/Summertime.json`** (đích)
 - 989 nốt, 515 thời điểm khác nhau, kéo dài đến khoảng 139,4 s, nốt đầu tại 2160 ms.
@@ -74,16 +75,19 @@ Chia thành các hàm nhỏ, mỗi hàm một test.
    Nếu hòa, ưu tiên mức có nhiều nốt nằm trong C4–C6 hơn, rồi mới đến mức dịch nhỏ nhất.
    Trên `test_output.mid`: −2 và +10 hòa nhau (632/650 nốt trong thang âm), nhưng −2 có 420 nốt trong C4–C6
    còn +10 chỉ có 181, nên kết quả đúng là **−2**. Đây là test bắt buộc.
-4. `converter/mapping.py` — `pitch_to_key(pitch, transpose) -> (key, warning|None)`
-   Gập quãng tám khi ngoài C4–C6 (60–84). Nốt ngoài thang âm đưa về nốt gần nhất và trả cảnh báo.
+4. `converter/mapping.py` — `pitch_to_key(pitch, transpose) -> (key, tuple[MappingWarning, ...])`
+   Gập quãng tám khi ngoài C4–C6 (60–84). Nốt ngoài thang âm đưa về nốt gần nhất.
+   Cảnh báo có kiểu: `folded` chỉ được đếm; `out_of_scale` giữ thông điệp.
    Với MIDI mẫu sau khi dịch −2: 0 nốt cao hơn C6, nhưng 230/650 nốt thấp hơn C4 (thấp nhất là 38), nên gập quãng tám
    là bắt buộc chứ không phải trường hợp hiếm.
    Test: 7 nốt đầu của MIDI mẫu (81,81,78,83,81,76,74) sau khi dịch −2 phải ra Key 11,11,9,12,11,8,7.
    Sau khi gập, hai nốt cùng thời điểm có thể rơi vào cùng một phím (ví dụ bè trầm cách giai điệu đúng quãng tám). Khi đó chỉ giữ một nốt.
 5. `converter/chords.py` — gộp nốt cùng thời điểm, khử trùng, giới hạn số nốt/hợp âm (cấu hình, mặc định 4,
-   giữ nốt cao nhất và thấp nhất khi phải cắt).
+   giữ nốt cao nhất và thấp nhất khi phải cắt). Các onset cách nhau dưới `merge_ms` được gộp về trung vị.
 6. `converter/convert.py` — ghép tất cả: `convert(notes, config) -> ConversionResult`
-   với `ConversionResult(sky_notes, transpose, grid_ms, warnings, stats)`.
+   với `ConversionResult(sky_notes, transpose, grid_ms, warnings, stats)`. Cấu hình mặc định:
+   `grid_ms=120`, `merge_ms=40`, `max_chord=4`. `warnings` chỉ chứa cảnh báo `out_of_scale`;
+   `stats` đếm riêng `folded_count` và `out_of_scale_count`.
 
 Xong khi: `test_output.mid` chuyển ra JSON hợp lệ qua exporter của Bước 1, nhập được vào Sky Studio.
 

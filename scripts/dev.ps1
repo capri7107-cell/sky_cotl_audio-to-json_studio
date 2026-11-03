@@ -1,7 +1,11 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "test", "lint", "types", "all")]
+    [ValidateSet("install", "test", "lint", "types", "all", "convert", "compare")]
     [string]$Task,
+    [Parameter(Position = 1)]
+    [string]$InputPath,
+    [Parameter(Position = 2)]
+    [string]$OutputPath,
     [switch]$Fix
 )
 
@@ -22,6 +26,26 @@ function Invoke-PythonModule {
     & $python @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Python command failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Invoke-PythonScript {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments
+    )
+
+    $srcPath = Join-Path (Get-Location) "src"
+    if ($env:PYTHONPATH) {
+        $env:PYTHONPATH = "$srcPath;$env:PYTHONPATH"
+    }
+    else {
+        $env:PYTHONPATH = $srcPath
+    }
+
+    & $python @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python script failed with exit code $LASTEXITCODE."
     }
 }
 
@@ -50,5 +74,14 @@ switch ($Task) {
         Invoke-PythonModule @("-m", "pytest", "-q")
         Invoke-PythonModule $ruffArguments
         Invoke-PythonModule @("-m", "mypy", "src")
+    }
+    "convert" {
+        if (-not $InputPath -or -not $OutputPath) {
+            throw "convert requires an input MIDI path and an output JSON path."
+        }
+        Invoke-PythonScript @("scripts/convert_midi.py", $InputPath, $OutputPath)
+    }
+    "compare" {
+        Invoke-PythonScript @("tools/compare.py")
     }
 }
