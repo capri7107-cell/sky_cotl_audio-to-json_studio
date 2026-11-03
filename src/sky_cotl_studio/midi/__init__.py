@@ -1,0 +1,1 @@
+"""MIDI reading and processing."""
