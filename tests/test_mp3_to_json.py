@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -41,6 +44,28 @@ def test_mp3_cli_defaults_to_automatic_grid_and_accepts_fixed_mode() -> None:
     assert defaults.grid_mode == "auto"
     assert fixed.grid_mode == "fixed"
     assert fixed.grid_ms == 187
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    ["convert_midi.py", "mp3_to_json.py"],
+)
+def test_conversion_scripts_run_directly_without_pythonpath(script_name: str) -> None:
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / script_name
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "usage:" in completed.stdout
 
 
 def _mock_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[str]:

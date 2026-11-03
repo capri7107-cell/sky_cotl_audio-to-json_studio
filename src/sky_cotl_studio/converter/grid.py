@@ -5,11 +5,12 @@ from collections.abc import Sequence
 from itertools import pairwise
 from statistics import median
 
-_MIN_AUTO_GRID_MS = 40.0
+_MIN_AUTO_GRID_MS = 100.0
 _MAX_AUTO_GRID_MS = 1000.0
-_MAX_GRID_DIVISOR = 8
+_GRID_DIVISORS = (1, 2, 4, 8)
 _MAX_LATTICE_RMSE_MS = 25.0
-_MIN_SINGLE_STEP_RATIO = 0.02
+_MIN_AUTO_ONSETS = 5
+_MIN_SINGLE_STEP_RATIO = 0.01
 
 
 def estimate_grid(onsets_ms: Sequence[float]) -> float:
@@ -44,17 +45,19 @@ def estimate_grid(onsets_ms: Sequence[float]) -> float:
 def estimate_lattice(onsets_ms: Sequence[float]) -> tuple[float, float]:
     """Fit the finest supported onset lattice, returning its step and phase.
 
-    Candidate steps come from adjacent onset intervals and their first eight
-    integer subdivisions. Each candidate is refined by alternating integer
+    Candidate steps come from adjacent onset intervals and binary subdivisions
+    through one eighth. Each candidate is refined by alternating integer
     assignment and least-squares fitting of ``time = phase + index * step``.
-    A candidate must have at least 2% single-step transitions and no more
-    than 25 ms RMS onset residual; this rejects unsupported subharmonics.
+    The fit requires at least five distinct onsets, at least 1% of transitions
+    advancing by one grid step, and no more than 25 ms RMS onset residual.
     """
     if any(not math.isfinite(onset) for onset in onsets_ms):
         raise ValueError("onsets_ms must contain only finite values")
     ordered_onsets = sorted(set(onsets_ms))
-    if len(ordered_onsets) < 2:
-        raise ValueError("at least two distinct onsets are required")
+    if len(ordered_onsets) < _MIN_AUTO_ONSETS:
+        raise ValueError(
+            f"at least {_MIN_AUTO_ONSETS} distinct onsets are required"
+        )
 
     origin = ordered_onsets[0]
     relative_onsets = [onset - origin for onset in ordered_onsets]
@@ -65,18 +68,20 @@ def estimate_lattice(onsets_ms: Sequence[float]) -> tuple[float, float]:
     candidates = {
         interval / divisor
         for interval in intervals
-        for divisor in range(1, _MAX_GRID_DIVISOR + 1)
+        for divisor in _GRID_DIVISORS
         if _MIN_AUTO_GRID_MS <= interval / divisor <= _MAX_AUTO_GRID_MS
     }
 
     acceptable: list[tuple[float, float, float]] = []
-    candidate_fits: list[tuple[float, float, float, float]] = []
+    candidate_fits: list[tuple[float, float, float, float, int]] = []
     for candidate in candidates:
-        step, phase, rmse, single_step_ratio = _fit_lattice(
+        step, phase, rmse, single_step_ratio, single_step_count = _fit_lattice(
             relative_onsets,
             candidate,
         )
-        candidate_fits.append((step, phase, rmse, single_step_ratio))
+        candidate_fits.append(
+            (step, phase, rmse, single_step_ratio, single_step_count)
+        )
         if (
             _MIN_AUTO_GRID_MS <= step <= _MAX_AUTO_GRID_MS
             and rmse <= _MAX_LATTICE_RMSE_MS
@@ -92,8 +97,8 @@ def estimate_lattice(onsets_ms: Sequence[float]) -> tuple[float, float]:
         if not diagnostics:
             diagnostics = sorted(candidate_fits, key=lambda fit: (fit[2], -fit[3]))[:5]
         summary = "; ".join(
-            f"{step:.2f} ms/RMS {rmse:.2f}/single {ratio:.1%}"
-            for step, _phase, rmse, ratio in diagnostics
+            f"{step:.2f} ms/RMS {rmse:.2f}/single {ratio:.1%} ({count})"
+            for step, _phase, rmse, ratio, count in diagnostics
         )
         raise ValueError(
             "could not estimate a stable onset grid "
@@ -106,7 +111,7 @@ def estimate_lattice(onsets_ms: Sequence[float]) -> tuple[float, float]:
 def _fit_lattice(
     onsets_ms: Sequence[float],
     initial_step: float,
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float, float, float, int]:
     step = initial_step
     phase = 0.0
     indices: list[int] = []
@@ -140,7 +145,7 @@ def _fit_lattice(
         for earlier_index, later_index in pairwise(indices)
     )
     transition_count = max(1, len(indices) - 1)
-    return step, phase, rmse, single_steps / transition_count
+    return step, phase, rmse, single_steps / transition_count, single_steps
 
 
 def quantize(time_ms: float, grid_ms: float) -> int:

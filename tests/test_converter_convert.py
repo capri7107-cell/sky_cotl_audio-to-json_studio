@@ -26,7 +26,7 @@ def test_convert_fixture_through_exporter_and_loader(tmp_path: Path) -> None:
 
     assert reloaded_notes == result.sky_notes
     assert result.transpose == -2
-    assert 60 <= result.grid_ms <= 300
+    assert result.grid_ms == pytest.approx(120, abs=2)
     assert result.sky_notes
     assert min(note.time_ms for note in reloaded_notes) == 0
     assert all(0 <= note.key <= 14 for note in reloaded_notes)
@@ -47,6 +47,11 @@ def test_convert_fixture_through_exporter_and_loader(tmp_path: Path) -> None:
     assert metrics[1:3] == (230, 18)
     assert metrics[3] >= 480
     assert metrics[4] <= 4
+    output_times = sorted({note.time_ms for note in reloaded_notes})
+    assert 120 in {
+        later - earlier
+        for earlier, later in pairwise(output_times)
+    }
 
 
 def test_convert_applies_configured_timing_and_chord_limit() -> None:
@@ -119,10 +124,7 @@ def test_auto_grid_real_transkun_fixture_meets_timing_requirements() -> None:
         for earlier, later in pairwise(output_onsets)
     ]
 
-    assert result.grid_ms == pytest.approx(187, abs=5) or result.grid_ms == pytest.approx(
-        374,
-        abs=5,
-    )
+    assert result.grid_ms == pytest.approx(187, abs=5)
     assert differences
     assert sum(
         abs(delta / result.grid_ms - round(delta / result.grid_ms)) < 0.01

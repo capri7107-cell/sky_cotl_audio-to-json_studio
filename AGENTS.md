@@ -127,7 +127,7 @@ Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
 |---|---|
 | Nốt ngoài thang âm | Đưa về nốt gần nhất, ghi vào danh sách cảnh báo trong kết quả. |
 | Nốt ngoài C4–C6 (MIDI mẫu có khoảng 35% nốt thấp hơn C4 sau khi dịch) | Gập quãng tám vào C4–C6, vì không có layer để tách bè trầm. |
-| Lưới thời gian | Mặc định `grid_mode="auto"` khớp bình phương tối thiểu chu kỳ và pha trên onset đã gộp; xét các ước số đến 1/8, chọn lưới nhỏ nhất có ít nhất 2% bước đơn và RMS không quá 25 ms. Có thể đặt `grid_mode="fixed"` để dùng `grid_ms`. Giữ nguyên `bpm` vì ý nghĩa chưa xác nhận. |
+| Lưới thời gian | Mặc định `grid_mode="auto"` khớp bình phương tối thiểu chu kỳ và pha trên onset đã gộp; xét lưới 100–1000 ms, gồm nhịp và các ước số nhị phân 1/2, 1/4, 1/8. Chọn lưới nhỏ nhất có ít nhất 5 onset, ít nhất 1% bước đơn và RMS không quá 25 ms. Có thể đặt `grid_mode="fixed"` để dùng `grid_ms`. Giữ nguyên `bpm` vì ý nghĩa chưa xác nhận. |
 
 ## 7. Quy tắc làm việc
 

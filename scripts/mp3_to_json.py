@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -9,6 +10,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sky_cotl_studio.ai.transkun_runner import (
     Device,

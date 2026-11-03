@@ -5,11 +5,11 @@ Thứ tự đi từ dưới lên: các phần kiểm chứng được bằng `fi
 
 ## Dữ kiện từ fixtures
 
-**`fixtures/test_output.mid`** (đầu ra Transkun)
+**`fixtures/test_output.mid`** (đầu ra thật của Transkun trên MP3 tutorial piano tổng hợp)
 - Format 1, 960 ticks/beat, 2 track. Track 0 chỉ có meta tempo (500000 µs/beat = 120 BPM mặc định) và 4/4.
 - Track 1: 650 note-on, kênh 0, pitch 40–83, velocity khoảng 80–98.
 - Nốt đầu tại tick 12041 (≈ 6,27 s). Nốt cuối khoảng 163 s.
-- Onset gần như nằm đúng lưới 120 ms, không phản ánh timing của Transkun thật
+- Timing rất đều
   (khoảng cách 458–463 ticks, ≈ 240 ms).
 
 **`fixtures/Summertime.json`** (đích)

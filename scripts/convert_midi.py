@@ -1,7 +1,10 @@
 """Convert a MIDI file to Sky Studio JSON."""
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.converter.convert import convert

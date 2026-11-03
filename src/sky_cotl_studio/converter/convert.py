@@ -72,7 +72,7 @@ def convert(
     earliest_onset = min(note.time_ms for note in merged_notes)
     if converter_config.grid_mode == "auto":
         distinct_onsets = {note.time_ms for note in merged_notes}
-        if len(distinct_onsets) < 2:
+        if len(distinct_onsets) < 5:
             grid_ms, phase_ms = converter_config.grid_ms, 0.0
         else:
             grid_ms, phase_ms = estimate_lattice(
