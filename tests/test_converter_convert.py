@@ -48,10 +48,11 @@ def test_convert_fixture_through_exporter_and_loader(tmp_path: Path) -> None:
     assert metrics[3] >= 480
     assert metrics[4] <= 4
     output_times = sorted({note.time_ms for note in reloaded_notes})
-    assert 120 in {
+    output_steps = [
         later - earlier
         for earlier, later in pairwise(output_times)
-    }
+    ]
+    assert output_steps.count(120) == 9
 
 
 def test_convert_applies_configured_timing_and_chord_limit() -> None:

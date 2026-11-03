@@ -1,45 +1,25 @@
 """Transcribe an MP3 and export it as Sky Studio JSON."""
 
 import argparse
-import os
 import sys
-import tempfile
-import threading
-import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from sky_cotl_studio.ai.transkun_runner import (
-    Device,
-    ProgressCallback,
-    TranskunError,
-    resolve_device,
-    transcribe,
-)
-from sky_cotl_studio.audio.validate import AudioValidationError, validate_mp3
+from sky_cotl_studio.ai.transkun_runner import Device
 from sky_cotl_studio.converter.config import ConverterConfig
-from sky_cotl_studio.converter.convert import ConversionResult, convert
-from sky_cotl_studio.exporters.sky_studio import export
-from sky_cotl_studio.midi.cleanup import trim_leading_silence
-from sky_cotl_studio.midi.reader import read_notes
 from sky_cotl_studio.models import SongMeta
+from sky_cotl_studio.pipeline.job import (
+    ConversionJob,
+    ConversionJobCancelled,
+    ConversionJobConfig,
+    ConversionJobError,
+    ConversionJobResult,
+    JobState,
+)
 
-T = TypeVar("T")
-
-
-@dataclass(frozen=True)
-class MP3ConversionReport:
-    """Outcome and stage timings for one MP3-to-JSON conversion."""
-
-    midi_path: Path | None
-    device: Device
-    conversion: ConversionResult
-    phase_seconds: dict[str, float]
-    leading_silence_ms: float
+LegacyProgressCallback = Callable[[str], None]
 
 
 def run_mp3_to_json(
@@ -49,86 +29,58 @@ def run_mp3_to_json(
     device: Device | None = None,
     keep_midi: bool = False,
     midi_out: str | Path | None = None,
-    progress_callback: ProgressCallback | None = None,
+    progress_callback: LegacyProgressCallback | None = None,
     config: ConverterConfig | None = None,
-) -> MP3ConversionReport:
-    """Run the validated transcription and conversion pipeline for one MP3."""
+    metadata: SongMeta | None = None,
+) -> ConversionJobResult:
+    """Run a ``ConversionJob`` synchronously for existing CLI callers."""
     source = Path(input_path)
     destination = Path(output_path)
-    retained_midi_path = (
-        Path(midi_out)
-        if midi_out is not None
-        else destination.with_suffix(".mid") if keep_midi else None
+    converter_config = config or ConverterConfig()
+    song_metadata = metadata or SongMeta(
+        name=source.stem,
+        author="",
+        transcribed_by="",
+        is_composed=False,
+        bpm=500,
+        bits_per_page=16,
+        pitch_level=2,
+        is_encrypted=False,
     )
-    if retained_midi_path is not None and _same_path(retained_midi_path, source):
-        raise ValueError("MIDI output path must be different from the MP3 input path")
-    if _same_path(destination, source):
-        raise ValueError("JSON output path must be different from the MP3 input path")
-    if retained_midi_path is not None and _same_path(retained_midi_path, destination):
-        raise ValueError("MIDI and JSON output paths must be different")
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if retained_midi_path is not None:
-        retained_midi_path.parent.mkdir(parents=True, exist_ok=True)
-        transcription_path = retained_midi_path
-    else:
-        transcription_path = _temporary_path(destination.parent, destination.stem, ".mid")
-
-    cancellation = threading.Event()
-    phase_seconds: dict[str, float] = {}
-    json_temp_path: Path | None = None
+    job = ConversionJob(
+        ConversionJobConfig(
+            input_path=source,
+            output_path=destination,
+            metadata=song_metadata,
+            grid_mode=converter_config.grid_mode,
+            grid_ms=converter_config.grid_ms,
+            merge_ms=converter_config.merge_ms,
+            max_chord=converter_config.max_chord,
+            device=device,
+            keep_midi=keep_midi,
+            midi_out=Path(midi_out) if midi_out is not None else None,
+        ),
+        progress_callback=(
+            lambda event: progress_callback(event.message)
+            if progress_callback is not None
+            else None
+        ),
+    )
+    job.start()
     try:
-        audio_info, phase_seconds["validate"] = _measure(lambda: validate_mp3(source))
-        selected_device = resolve_device(device)
-        _, phase_seconds["transcribe"] = _measure(
-            lambda: transcribe(
-                source,
-                transcription_path,
-                device=selected_device,
-                progress_callback=progress_callback,
-                cancel_event=cancellation,
-                validated_audio=audio_info,
-            )
-        )
-        midi_notes, phase_seconds["read_midi"] = _measure(lambda: read_notes(transcription_path))
-        (trimmed_notes, leading_silence_ms), phase_seconds["trim"] = _measure(
-            lambda: trim_leading_silence(midi_notes)
-        )
-        conversion, phase_seconds["convert"] = _measure(
-            lambda: convert(trimmed_notes, config or ConverterConfig())
-        )
-        metadata = SongMeta(
-            name=source.stem,
-            author="",
-            transcribed_by="",
-            is_composed=False,
-            bpm=500,
-            bits_per_page=16,
-            pitch_level=2,
-            is_encrypted=False,
-        )
-        json_text, phase_seconds["export"] = _measure(
-            lambda: export(metadata, conversion.sky_notes)
-        )
-        json_temp_path = _temporary_path(destination.parent, destination.stem, ".json")
-        json_temp_path.write_text(json_text, encoding="utf-8")
-        os.replace(json_temp_path, destination)
-        json_temp_path = None
-        return MP3ConversionReport(
-            midi_path=retained_midi_path,
-            device=selected_device,
-            conversion=conversion,
-            phase_seconds=phase_seconds,
-            leading_silence_ms=leading_silence_ms,
-        )
+        job.wait()
     except KeyboardInterrupt:
-        cancellation.set()
+        job.cancel()
+        job.wait()
         raise
-    finally:
-        if json_temp_path is not None:
-            json_temp_path.unlink(missing_ok=True)
-        if retained_midi_path is None:
-            transcription_path.unlink(missing_ok=True)
+
+    if job.state is JobState.FAILED and job.failure is not None:
+        raise ConversionJobError(job.failure)
+    if job.state is JobState.CANCELLED:
+        raise ConversionJobCancelled("Conversion was cancelled")
+    if job.result is None:
+        raise RuntimeError("Conversion job ended without a result")
+    return job.result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -169,7 +121,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Conversion cancelled; temporary MIDI was removed.")
         return 130
-    except (AudioValidationError, OSError, TranskunError, TypeError, ValueError) as error:
+    except ConversionJobCancelled:
+        print("Conversion cancelled; temporary MIDI was removed.")
+        return 130
+    except ConversionJobError as error:
+        print(f"Conversion failed: {error.failure.user_message}")
+        print(f"Technical cause: {error.failure.technical_cause}")
+        return 1
+    except (OSError, TypeError, ValueError) as error:
         print(f"Conversion failed: {error}")
         return 1
 
@@ -195,28 +154,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Kept MIDI: {report.midi_path}")
     print(f"Output JSON: {args.json_path}")
     return 0
-
-
-def _measure(operation: Callable[[], T]) -> tuple[T, float]:
-    start = time.perf_counter()
-    result = operation()
-    return result, time.perf_counter() - start
-
-
-def _temporary_path(directory: Path, stem: str, suffix: str) -> Path:
-    descriptor, name = tempfile.mkstemp(
-        prefix=f".{stem}.",
-        suffix=suffix,
-        dir=directory,
-    )
-    os.close(descriptor)
-    path = Path(name)
-    path.unlink()
-    return path
-
-
-def _same_path(first: Path, second: Path) -> bool:
-    return first.resolve() == second.resolve()
 
 
 if __name__ == "__main__":

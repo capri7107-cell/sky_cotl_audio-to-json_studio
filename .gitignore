@@ -1,6 +1,27 @@
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Test, typecheck & linter caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Project outputs
 out/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build & packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Audio / Media downloads & temp files (tránh commit file nặng)
+*.mp3
+*.wav
+*.flac

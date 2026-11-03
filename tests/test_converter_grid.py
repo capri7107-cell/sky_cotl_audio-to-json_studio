@@ -49,6 +49,24 @@ def test_auto_lattice_requires_five_distinct_onsets() -> None:
         estimate_lattice([0, 120, 240, 360])
 
 
+def test_auto_lattice_rejects_finer_grid_with_only_one_single_step() -> None:
+    onsets = [float(index * 374) for index in range(81)]
+    onsets.insert(41, 40 * 374 + 187.0)
+
+    grid_ms, _phase_ms = estimate_lattice(onsets)
+
+    assert grid_ms == pytest.approx(374, abs=2)
+
+
+def test_auto_lattice_rejects_finer_grid_when_two_odd_onsets_miss_tolerance() -> None:
+    onsets = [float(index * 374) for index in range(81)]
+    onsets.extend([30 * 374 + 100.0, 60 * 374 + 100.0])
+
+    grid_ms, _phase_ms = estimate_lattice(onsets)
+
+    assert grid_ms == pytest.approx(374, abs=2)
+
+
 @pytest.mark.parametrize("onsets", [[], [10.0]])
 def test_estimate_grid_requires_at_least_two_onsets(onsets: list[float]) -> None:
     with pytest.raises(ValueError):

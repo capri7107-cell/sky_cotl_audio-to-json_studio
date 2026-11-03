@@ -11,6 +11,7 @@ import pytest
 from scripts.mp3_to_json import build_parser, run_mp3_to_json
 from sky_cotl_studio.converter.convert import ConversionResult, ConversionStats
 from sky_cotl_studio.models import SkyNote
+from sky_cotl_studio.pipeline.job import ConversionJobError
 
 
 def _conversion_result() -> ConversionResult:
@@ -102,13 +103,19 @@ def _mock_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         calls.append("export")
         return json.dumps([{"songNotes": [{"time": note.time_ms} for note in notes]}])
 
-    monkeypatch.setattr("scripts.mp3_to_json.validate_mp3", validate)
-    monkeypatch.setattr("scripts.mp3_to_json.transcribe", transcribe)
-    monkeypatch.setattr("scripts.mp3_to_json.read_notes", read_notes)
-    monkeypatch.setattr("scripts.mp3_to_json.trim_leading_silence", trim)
-    monkeypatch.setattr("scripts.mp3_to_json.convert", convert)
-    monkeypatch.setattr("scripts.mp3_to_json.export", export)
-    monkeypatch.setattr("scripts.mp3_to_json.resolve_device", lambda _device: "cpu")
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.validate_mp3", validate)
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.transcribe", transcribe)
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.read_notes", read_notes)
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.trim_leading_silence",
+        trim,
+    )
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.convert", convert)
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.export", export)
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.resolve_device",
+        lambda _device: "cpu",
+    )
     return calls
 
 
@@ -185,9 +192,12 @@ def test_keyboard_interrupt_cleans_temporary_midi(
         midi_path.write_bytes(b"partial")
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("scripts.mp3_to_json.transcribe", interrupted_transcribe)
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.transcribe",
+        interrupted_transcribe,
+    )
 
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(ConversionJobError):
         run_mp3_to_json(input_mp3, output_json)
 
     assert not list(tmp_path.glob("*.mid"))
@@ -202,5 +212,5 @@ def test_run_mp3_to_json_rejects_midi_out_same_as_input(
     input_mp3.write_bytes(b"audio")
     _mock_pipeline(monkeypatch)
 
-    with pytest.raises(ValueError, match="different"):
+    with pytest.raises(ValueError, match="differ"):
         run_mp3_to_json(input_mp3, tmp_path / "out.json", midi_out=input_mp3)

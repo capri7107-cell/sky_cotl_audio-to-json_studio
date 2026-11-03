@@ -2,6 +2,7 @@
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from itertools import pairwise
 from statistics import median
 
@@ -10,7 +11,17 @@ _MAX_AUTO_GRID_MS = 1000.0
 _GRID_DIVISORS = (1, 2, 4, 8)
 _MAX_LATTICE_RMSE_MS = 25.0
 _MIN_AUTO_ONSETS = 5
-_MIN_SINGLE_STEP_RATIO = 0.01
+_MIN_ODD_ONSETS = 2
+_MAX_FINE_GRID_RMSE_RATIO = 0.75
+_LATTICE_RESIDUAL_TOLERANCE_MS = 25.0
+
+
+@dataclass(frozen=True)
+class _LatticeFit:
+    step_ms: float
+    phase_ms: float
+    rmse_ms: float
+    odd_onset_count: int
 
 
 def estimate_grid(onsets_ms: Sequence[float]) -> float:
@@ -48,8 +59,9 @@ def estimate_lattice(onsets_ms: Sequence[float]) -> tuple[float, float]:
     Candidate steps come from adjacent onset intervals and binary subdivisions
     through one eighth. Each candidate is refined by alternating integer
     assignment and least-squares fitting of ``time = phase + index * step``.
-    The fit requires at least five distinct onsets, at least 1% of transitions
-    advancing by one grid step, and no more than 25 ms RMS onset residual.
+    A finer binary grid is accepted only when its step is at least 100 ms,
+    its RMS residual is at most 25 ms and at most 75% of the coarser fit's
+    RMS, and at least two onsets fall within 25 ms of an odd grid index.
     """
     if any(not math.isfinite(onset) for onset in onsets_ms):
         raise ValueError("onsets_ms must contain only finite values")
@@ -72,46 +84,54 @@ def estimate_lattice(onsets_ms: Sequence[float]) -> tuple[float, float]:
         if _MIN_AUTO_GRID_MS <= interval / divisor <= _MAX_AUTO_GRID_MS
     }
 
-    acceptable: list[tuple[float, float, float]] = []
-    candidate_fits: list[tuple[float, float, float, float, int]] = []
+    fits_by_step: dict[float, _LatticeFit] = {}
     for candidate in candidates:
-        step, phase, rmse, single_step_ratio, single_step_count = _fit_lattice(
-            relative_onsets,
-            candidate,
-        )
-        candidate_fits.append(
-            (step, phase, rmse, single_step_ratio, single_step_count)
-        )
-        if (
-            _MIN_AUTO_GRID_MS <= step <= _MAX_AUTO_GRID_MS
-            and rmse <= _MAX_LATTICE_RMSE_MS
-            and single_step_ratio >= _MIN_SINGLE_STEP_RATIO
-        ):
-            acceptable.append((step, phase, rmse))
+        fit = _fit_lattice(relative_onsets, candidate)
+        if not _MIN_AUTO_GRID_MS <= fit.step_ms <= _MAX_AUTO_GRID_MS:
+            continue
+        step_key = round(fit.step_ms, 1)
+        previous_fit = fits_by_step.get(step_key)
+        if previous_fit is None or fit.rmse_ms < previous_fit.rmse_ms:
+            fits_by_step[step_key] = fit
 
-    if not acceptable:
-        diagnostics = sorted(
-            (fit for fit in candidate_fits if 170 <= fit[0] <= 390),
-            key=lambda fit: (fit[2], -fit[3]),
-        )[:5]
-        if not diagnostics:
-            diagnostics = sorted(candidate_fits, key=lambda fit: (fit[2], -fit[3]))[:5]
+    stable_fits = [
+        fit
+        for fit in fits_by_step.values()
+        if fit.rmse_ms <= _LATTICE_RESIDUAL_TOLERANCE_MS
+    ]
+    if not stable_fits:
+        diagnostics = sorted(fits_by_step.values(), key=lambda fit: fit.rmse_ms)[:5]
         summary = "; ".join(
-            f"{step:.2f} ms/RMS {rmse:.2f}/single {ratio:.1%} ({count})"
-            for step, _phase, rmse, ratio, count in diagnostics
+            f"{fit.step_ms:.2f} ms/RMS {fit.rmse_ms:.2f}"
+            for fit in diagnostics
         )
         raise ValueError(
             "could not estimate a stable onset grid "
             f"(candidate fits: {summary}); use grid_mode='fixed' "
             "or provide a fixed grid_ms"
         )
-    return min(acceptable, key=lambda fit: (fit[0], fit[2]))[:2]
+
+    selected_fit = max(stable_fits, key=lambda fit: fit.step_ms)
+    while True:
+        finer_fits = [
+            fit
+            for fit in stable_fits
+            if _is_binary_subdivision(selected_fit.step_ms, fit.step_ms)
+            and fit.odd_onset_count >= _MIN_ODD_ONSETS
+            and fit.rmse_ms
+            <= selected_fit.rmse_ms * _MAX_FINE_GRID_RMSE_RATIO
+        ]
+        if not finer_fits:
+            break
+        selected_fit = min(finer_fits, key=lambda fit: (fit.step_ms, fit.rmse_ms))
+
+    return selected_fit.step_ms, selected_fit.phase_ms
 
 
 def _fit_lattice(
     onsets_ms: Sequence[float],
     initial_step: float,
-) -> tuple[float, float, float, float, int]:
+) -> _LatticeFit:
     step = initial_step
     phase = 0.0
     indices: list[int] = []
@@ -140,12 +160,20 @@ def _fit_lattice(
         for onset, index in zip(onsets_ms, indices)
     ]
     rmse = math.sqrt(sum(residual * residual for residual in residuals) / len(residuals))
-    single_steps = sum(
-        later_index - earlier_index == 1
-        for earlier_index, later_index in pairwise(indices)
+    odd_onset_count = sum(
+        index % 2 == 1 and abs(residual) <= _LATTICE_RESIDUAL_TOLERANCE_MS
+        for index, residual in zip(indices, residuals)
     )
-    transition_count = max(1, len(indices) - 1)
-    return step, phase, rmse, single_steps / transition_count, single_steps
+    return _LatticeFit(step, phase, rmse, odd_onset_count)
+
+
+def _is_binary_subdivision(coarser_step_ms: float, finer_step_ms: float) -> bool:
+    if finer_step_ms >= coarser_step_ms:
+        return False
+    return abs(coarser_step_ms - 2 * finer_step_ms) <= max(
+        2.0,
+        finer_step_ms * 0.02,
+    )
 
 
 def quantize(time_ms: float, grid_ms: float) -> int:
