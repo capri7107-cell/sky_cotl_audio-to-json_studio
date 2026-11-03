@@ -127,6 +127,7 @@ Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
 |---|---|
 | Nốt ngoài thang âm | Đưa về nốt gần nhất, ghi vào danh sách cảnh báo trong kết quả. |
 | Nốt ngoài C4–C6 (MIDI mẫu có khoảng 35% nốt thấp hơn C4 sau khi dịch) | Gập quãng tám vào C4–C6, vì không có layer để tách bè trầm. |
+| Lưới thời gian | JSON mẫu: `bpm`=500 ↔ lưới 120 ms (60000/bpm). Chưa xác nhận `bpm` quy định lưới. Không coi 120 ms là hằng số cố định; chờ kiểm tra trên `transkun_real.mid`. |
 
 ## 7. Quy tắc làm việc
 

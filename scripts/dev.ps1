@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "test", "lint", "types", "all", "convert", "compare")]
+    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare")]
     [string]$Task,
     [Parameter(Position = 1)]
     [string]$InputPath,
@@ -63,6 +63,9 @@ switch ($Task) {
     }
     "test" {
         Invoke-PythonModule @("-m", "pytest", "-q")
+    }
+    "test-gpu" {
+        Invoke-PythonModule @("-m", "pytest", "-q", "-m", "gpu")
     }
     "lint" {
         Invoke-PythonModule $ruffArguments
