@@ -140,7 +140,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"Input MIDI notes: {conversion.stats.input_note_count}")
     print(f"Transpose: {conversion.transpose}")
     print(f"Grid mode: {args.grid_mode}")
-    print(f"Grid: {conversion.grid_ms:g} ms")
+    grid_text = (
+        f"{conversion.grid_ms:g} ms"
+        if conversion.grid_ms is not None
+        else "not detected (unquantized)"
+    )
+    print(f"Grid: {grid_text}")
+    for warning in conversion.warnings:
+        if warning.message:
+            print(f"Warning: {warning.message}")
     print(f"Output notes: {conversion.stats.output_note_count}")
     print(f"Deduplicated notes: {conversion.stats.deduplicated_count}")
     print(f"Chord-trimmed notes: {conversion.stats.chord_trimmed_count}")

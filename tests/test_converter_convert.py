@@ -4,8 +4,10 @@ from statistics import mean
 
 import pytest
 
+from sky_cotl_studio.converter import convert as convert_module
 from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.converter.convert import convert
+from sky_cotl_studio.converter.grid import GridEstimationError
 from sky_cotl_studio.exporters.sky_studio import export, load
 from sky_cotl_studio.midi.reader import read_notes
 from sky_cotl_studio.models import Note
@@ -84,6 +86,28 @@ def test_fixed_grid_mode_quantizes_using_configured_grid() -> None:
 
     assert result.grid_ms == 70
     assert [note.time_ms for note in result.sky_notes] == [0, 70, 210]
+
+
+def test_auto_grid_falls_back_to_unquantized_onsets_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notes = [
+        Note(time_ms=time_ms, duration_ms=80.0, pitch=67, velocity=90)
+        for time_ms in (10.2, 137.8, 291.4, 500.6, 781.3)
+    ]
+
+    def no_stable_grid(_onsets: list[float]) -> tuple[float, float]:
+        raise GridEstimationError("could not estimate a stable onset grid")
+
+    monkeypatch.setattr(convert_module, "estimate_lattice", no_stable_grid)
+    result = convert(notes, ConverterConfig())
+
+    assert result.grid_ms is None
+    assert [note.time_ms for note in result.sky_notes] == [0, 128, 281, 490, 771]
+    assert any(
+        warning.kind == "grid_fallback" and warning.message
+        for warning in result.warnings
+    )
 
 
 def test_convert_stats_count_folded_and_out_of_scale_notes_separately() -> None:

@@ -5,7 +5,7 @@ from typing import Literal
 
 from sky_cotl_studio.converter.scale import KEY0_MIDI_PITCH, KEY_SEMITONE_OFFSETS
 
-MappingWarningKind = Literal["folded", "out_of_scale"]
+MappingWarningKind = Literal["folded", "out_of_scale", "grid_fallback"]
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,10 @@ _MAX_FINE_GRID_RMSE_RATIO = 0.75
 _LATTICE_RESIDUAL_TOLERANCE_MS = 25.0
 
 
+class GridEstimationError(ValueError):
+    """Raised when onset times do not support a stable fitted grid."""
+
+
 @dataclass(frozen=True)
 class _LatticeFit:
     step_ms: float
@@ -105,7 +109,7 @@ def estimate_lattice(onsets_ms: Sequence[float]) -> tuple[float, float]:
             f"{fit.step_ms:.2f} ms/RMS {fit.rmse_ms:.2f}"
             for fit in diagnostics
         )
-        raise ValueError(
+        raise GridEstimationError(
             "could not estimate a stable onset grid "
             f"(candidate fits: {summary}); use grid_mode='fixed' "
             "or provide a fixed grid_ms"

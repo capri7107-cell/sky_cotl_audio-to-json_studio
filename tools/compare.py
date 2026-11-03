@@ -127,6 +127,8 @@ def run_fixture_comparison() -> ComparisonReport:
     """Convert the MIDI fixture and compare it to the transcribed JSON fixture."""
     _, reference_notes = load(_JSON_FIXTURE)
     result = convert(read_notes(_MIDI_FIXTURE), ConverterConfig())
+    if result.grid_ms is None:
+        raise ValueError("Automatic grid estimation failed for the comparison fixture")
     return compare_notes(
         result.sky_notes,
         reference_notes,

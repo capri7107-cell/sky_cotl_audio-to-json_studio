@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3")]
+    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app")]
     [string]$Task,
     [Parameter(Position = 1)]
     [string]$InputPath,
@@ -64,7 +64,11 @@ switch ($Task) {
         Invoke-PythonModule @("-m", "pip", "check")
     }
     "test" {
-        Invoke-PythonModule @("-m", "pytest", "-q")
+        $testArguments = @("-m", "pytest", "-q")
+        if ($InputPath) {
+            $testArguments += $InputPath
+        }
+        Invoke-PythonModule $testArguments
     }
     "test-gpu" {
         Invoke-PythonModule @("-m", "pytest", "-q", "-m", "gpu")
@@ -102,5 +106,8 @@ switch ($Task) {
             $mp3Arguments += $ExtraArguments
         }
         Invoke-PythonScript $mp3Arguments
+    }
+    "app" {
+        Invoke-PythonScript @("-m", "sky_cotl_studio.gui.app")
     }
 }

@@ -43,7 +43,8 @@ def main() -> None:
     print(f"Input MIDI notes: {result.stats.input_note_count}")
     print(f"Transpose: {result.transpose}")
     print(f"Grid mode: {config.grid_mode}")
-    print(f"Grid: {result.grid_ms:g} ms")
+    grid_text = f"{result.grid_ms:g} ms" if result.grid_ms is not None else "not detected"
+    print(f"Grid: {grid_text}")
     print(f"Output notes: {result.stats.output_note_count}")
     print(f"Distinct onset times: {result.stats.distinct_time_count}")
     print(f"Maximum chord size: {result.stats.max_chord_size}")

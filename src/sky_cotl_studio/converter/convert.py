@@ -11,7 +11,11 @@ from sky_cotl_studio.converter.chords import (
     merge_close_onsets,
 )
 from sky_cotl_studio.converter.config import ConverterConfig
-from sky_cotl_studio.converter.grid import estimate_lattice, quantize_lattice
+from sky_cotl_studio.converter.grid import (
+    GridEstimationError,
+    estimate_lattice,
+    quantize_lattice,
+)
 from sky_cotl_studio.converter.mapping import MappingWarning, pitch_to_key
 from sky_cotl_studio.converter.transpose import best_transpose
 from sky_cotl_studio.models import Note, SkyNote
@@ -38,7 +42,7 @@ class ConversionResult:
 
     sky_notes: list[SkyNote]
     transpose: int
-    grid_ms: float
+    grid_ms: float | None
     warnings: list[MappingWarning]
     stats: ConversionStats
 
@@ -70,33 +74,62 @@ def convert(
         return ConversionResult([], 0, converter_config.grid_ms, [], stats)
 
     earliest_onset = min(note.time_ms for note in merged_notes)
+    grid_warning: MappingWarning | None = None
     if converter_config.grid_mode == "auto":
         distinct_onsets = {note.time_ms for note in merged_notes}
         if len(distinct_onsets) < 5:
-            grid_ms, phase_ms = converter_config.grid_ms, 0.0
-        else:
-            grid_ms, phase_ms = estimate_lattice(
-                [note.time_ms - earliest_onset for note in merged_notes]
+            grid_ms, phase_ms = None, 0.0
+            grid_warning = MappingWarning(
+                kind="grid_fallback",
+                message=(
+                    "Không đủ onset để ước lượng lưới ổn định; giữ timing gốc "
+                    "và chỉ làm tròn đến mili giây."
+                ),
             )
+        else:
+            try:
+                grid_ms, phase_ms = estimate_lattice(
+                    [note.time_ms - earliest_onset for note in merged_notes]
+                )
+            except GridEstimationError:
+                grid_ms, phase_ms = None, 0.0
+                grid_warning = MappingWarning(
+                    kind="grid_fallback",
+                    message=(
+                        "Không tìm thấy lưới onset ổn định (RMS tối đa 25 ms); "
+                        "giữ timing gốc và chỉ làm tròn đến mili giây."
+                    ),
+                )
     else:
         grid_ms, phase_ms = converter_config.grid_ms, 0.0
-    normalized_notes = [
-        replace(
-            note,
-            time_ms=float(
-                quantize_lattice(
-                    note.time_ms - earliest_onset,
-                    grid_ms,
-                    phase_ms,
-                )
-            ),
-        )
-        for note in merged_notes
-    ]
+    if grid_ms is None:
+        normalized_notes = [
+            replace(
+                note,
+                time_ms=float(math.floor(note.time_ms - earliest_onset + 0.5)),
+            )
+            for note in merged_notes
+        ]
+    else:
+        normalized_notes = [
+            replace(
+                note,
+                time_ms=float(
+                    quantize_lattice(
+                        note.time_ms - earliest_onset,
+                        grid_ms,
+                        phase_ms,
+                    )
+                ),
+            )
+            for note in merged_notes
+        ]
     transpose = best_transpose([note.pitch for note in normalized_notes])
 
     sky_notes: list[SkyNote] = []
-    warnings: list[MappingWarning] = []
+    warnings: list[MappingWarning] = (
+        [grid_warning] if grid_warning is not None else []
+    )
     folded_count = 0
     out_of_scale_count = 0
     for note in normalized_notes:
