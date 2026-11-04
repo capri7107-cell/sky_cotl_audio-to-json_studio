@@ -166,6 +166,18 @@ Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
 - Không dùng `pip install --upgrade` trong môi trường này. Sau khi cài gói mới, chạy `python -m pip check`.
 - Dependency chia ba file: `requirements-core.txt`, `requirements-dev.txt`, `requirements-ai.txt`.
 
+### GUI, nhật ký và tiến trình con
+
+- `Chạy ứng dụng.vbs` mở GUI ở chế độ im lặng qua `scripts/dev.ps1 app-silent`;
+  `scripts/dev.ps1 app` giữ console để gỡ lỗi. Không thêm interpreter path thứ hai vào launcher.
+- GUI ghi lần chạy gần nhất vào `logs/last_run.log` (ghi đè) và lỗi ngoài dự kiến vào
+  `logs/app_error.log`; không đưa nhật ký kỹ thuật lên widget giao diện.
+- Các subprocess ffprobe, ffmpeg và Transkun phải dùng `CREATE_NO_WINDOW` trên Windows.
+  Khi runner được khởi chạy bằng `pythonw.exe`, tiến trình Transkun phải dùng `python.exe`
+  cùng thư mục để stdout/stderr có thể được đọc.
+- Mọi đầu ra console phải bỏ qua việc in khi `sys.stdout is None`; không gắn `StreamHandler`
+  trực tiếp vào `sys.stdout` trong các chế độ chạy GUI.
+
 ## 9. Những điều không được làm
 
 - Không import `PySide6` hay `torch` bên trong `midi`, `converter`, `exporters`.

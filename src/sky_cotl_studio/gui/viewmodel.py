@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from sky_cotl_studio.converter.convert import ConversionResult
 from sky_cotl_studio.models import SongMeta
 from sky_cotl_studio.pipeline.job import ConversionJobConfig, ConversionJobResult
 
@@ -114,6 +115,37 @@ def format_summary(result: ConversionJobResult) -> str:
         for phase, duration in result.phase_seconds.items()
     )
     return "\n".join(lines)
+
+
+def format_completion_status(conversion: ConversionResult) -> str:
+    """Format the successful result as one concise status-bar line."""
+    grid_text = (
+        f"{conversion.grid_ms:.2f} ms".replace(".", ",")
+        if conversion.grid_ms is not None
+        else "dự phòng"
+    )
+    parts = [
+        f"Hoàn tất: {conversion.stats.output_note_count} nốt",
+        f"lưới {grid_text}",
+    ]
+    if conversion.stats.out_of_scale_count:
+        parts.append(
+            f"{conversion.stats.out_of_scale_count} nốt ngoài thang âm"
+        )
+    return ", ".join(parts)
+
+
+def failure_message_vi(user_message: str) -> str:
+    """Translate pipeline failure summaries into short Vietnamese UI messages."""
+    messages = {
+        "The input MP3 could not be validated.": "Không thể đọc hoặc kiểm tra tệp MP3.",
+        "The MP3 could not be transcribed.": "Không thể phiên âm MP3 thành MIDI.",
+        "The generated MIDI could not be read.": "Không thể đọc MIDI được tạo.",
+        "The notes could not be converted.": "Không thể chuyển đổi các nốt nhạc.",
+        "The output JSON could not be created.": "Không thể tạo tệp JSON đầu ra.",
+        "The generated MIDI could not be processed.": "Không thể xử lý MIDI được tạo.",
+    }
+    return messages.get(user_message, "Không thể hoàn tất chuyển đổi.")
 
 
 def grid_mode_from_label(label: str) -> Literal["auto", "fixed"]:

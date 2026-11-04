@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Signal, Slot
@@ -17,7 +18,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QVBoxLayout,
@@ -28,7 +28,8 @@ from sky_cotl_studio.gui.viewmodel import (
     ConversionForm,
     build_job_config,
     device_from_label,
-    format_summary,
+    failure_message_vi,
+    format_completion_status,
     grid_mode_from_label,
     grid_ms_enabled,
     validate_form,
@@ -38,6 +39,8 @@ from sky_cotl_studio.pipeline.job import (
     JobProgress,
     JobState,
 )
+
+_LOG_DIRECTORY = Path(__file__).resolve().parents[3] / "logs"
 
 _STATE_LABELS = {
     JobState.PENDING: "Chờ bắt đầu",
@@ -89,12 +92,14 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._job: ConversionJob | None = None
+        self._run_logger: logging.Logger | None = None
         self._build_ui()
         self.progress_received.connect(self._handle_progress)
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Sky CotL — MP3 sang JSON")
-        self.setMinimumWidth(620)
+        self.setMinimumSize(520, 360)
+        self.resize(600, 400)
 
         central_widget = QWidget(self)
         layout = QVBoxLayout(central_widget)
@@ -168,17 +173,8 @@ class MainWindow(QMainWindow):
         self.progress_bar.setTextVisible(False)
         layout.addWidget(self.progress_bar)
 
-        self.summary_view = QPlainTextEdit()
-        self.summary_view.setReadOnly(True)
-        self.summary_view.setPlaceholderText("Tóm tắt sẽ hiện ở đây khi hoàn tất.")
-        layout.addWidget(self.summary_view)
-
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setMaximumBlockCount(2000)
-        self.log_view.setPlaceholderText("Nhật ký xử lý")
-        layout.addWidget(self.log_view)
         self.setCentralWidget(central_widget)
+        self.adjustSize()
 
     def _update_grid_ms_enabled(self, label: str) -> None:
         grid_mode = grid_mode_from_label(label)
@@ -237,17 +233,23 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.summary_view.clear()
         self.open_folder_button.setEnabled(False)
         try:
             config = build_job_config(form)
+            self._start_run_log()
+            self._log_info("Bắt đầu chuyển đổi: %s", config.input_path)
             job = ConversionJob(
                 config,
                 progress_callback=self.progress_received.emit,
             )
             job.start()
-        except (OSError, RuntimeError, TypeError, ValueError) as error:
-            QMessageBox.critical(self, "Không thể bắt đầu", str(error))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            self._log_exception("Không thể bắt đầu tác vụ chuyển đổi")
+            QMessageBox.critical(
+                self,
+                "Không thể bắt đầu",
+                "Không thể khởi chạy tác vụ chuyển đổi.",
+            )
             return
 
         self._job = job
@@ -261,14 +263,14 @@ class MainWindow(QMainWindow):
         if self._job is not None:
             self._job.cancel()
             self.cancel_button.setEnabled(False)
-            self._append_log("Đã yêu cầu hủy tác vụ.")
+            self._log_info("Đã yêu cầu hủy tác vụ.")
 
     @Slot(object)
     def _handle_progress(self, event: object) -> None:
         if not isinstance(event, JobProgress):
             return
         self.status_label.setText(_STATE_LABELS[event.phase])
-        self._append_log(event.message)
+        self._log_info("%s: %s", event.phase.value, event.message)
         if event.phase in (JobState.DONE, JobState.FAILED, JobState.CANCELLED):
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(1 if event.phase is JobState.DONE else 0)
@@ -281,19 +283,45 @@ class MainWindow(QMainWindow):
         if job is None:
             return
         if state is JobState.DONE and job.result is not None:
-            self.summary_view.setPlainText(format_summary(job.result))
+            self.status_label.setText(
+                format_completion_status(job.result.conversion)
+            )
+            self._log_info("Kết quả: %s", self.status_label.text())
             self.open_folder_button.setEnabled(True)
         elif state is JobState.FAILED and job.failure is not None:
-            self.summary_view.setPlainText(job.failure.user_message)
-            self._append_log(f"Nguyên nhân kỹ thuật: {job.failure.technical_cause}")
+            self._log_error(
+                "Chuyển đổi thất bại: %s",
+                job.failure.technical_cause,
+            )
+            QMessageBox.critical(
+                self,
+                "Chuyển đổi thất bại",
+                failure_message_vi(job.failure.user_message),
+            )
+        elif state is JobState.CANCELLED:
+            self._log_info("Tác vụ đã bị hủy.")
 
     def _open_output_folder(self) -> None:
         if self._job is not None and self._job.result is not None:
             folder = self._job.result.json_path.parent
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
-    def _append_log(self, message: str) -> None:
-        self.log_view.appendPlainText(message)
+    def _start_run_log(self) -> None:
+        from sky_cotl_studio.gui.logging_utils import create_run_logger
+
+        self._run_logger = create_run_logger(_LOG_DIRECTORY)
+
+    def _log_info(self, message: str, *args: object) -> None:
+        if self._run_logger is not None:
+            self._run_logger.info(message, *args)
+
+    def _log_error(self, message: str, *args: object) -> None:
+        if self._run_logger is not None:
+            self._run_logger.error(message, *args)
+
+    def _log_exception(self, message: str) -> None:
+        if self._run_logger is not None:
+            self._run_logger.exception(message)
 
     def closeEvent(self, event: object) -> None:
         if self._job is not None:

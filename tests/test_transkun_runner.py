@@ -1,4 +1,5 @@
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -53,11 +54,14 @@ def _setup_runner(
     *,
     cuda_available: bool = False,
     ffmpeg: str | None = "ffmpeg",
+    popen_kwargs: list[dict[str, object]] | None = None,
 ) -> list[list[str]]:
     commands: list[list[str]] = []
 
-    def fake_popen(command: list[str], **_: object) -> _FakeProcess:
+    def fake_popen(command: list[str], **kwargs: object) -> _FakeProcess:
         commands.append(command)
+        if popen_kwargs is not None:
+            popen_kwargs.append(kwargs)
         if process.create_output:
             Path(command[4]).write_bytes(b"partial midi")
         return process
@@ -105,6 +109,39 @@ def test_transcribe_uses_current_interpreter_and_auto_device(
     assert "starting transcription" in progress
     assert "Transkun completed" in progress[-1]
     assert process.waited
+
+
+def test_transcribe_uses_python_executable_when_started_with_pythonw(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_path = tmp_path / "input.mp3"
+    output_path = tmp_path / "output.mid"
+    input_path.write_bytes(b"audio")
+    process = _FakeProcess([], create_output=output_path)
+    monkeypatch.setattr(sys, "executable", r"C:\python-env\pythonw.exe")
+    commands = _setup_runner(monkeypatch, process)
+
+    transcribe(input_path, output_path, device="cpu")
+
+    assert commands[0][0] == r"C:\python-env\python.exe"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows subprocess creation flag only")
+def test_transkun_disables_console_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_path = tmp_path / "input.mp3"
+    output_path = tmp_path / "output.mid"
+    input_path.write_bytes(b"audio")
+    process = _FakeProcess([], create_output=output_path)
+    popen_kwargs: list[dict[str, object]] = []
+    _setup_runner(monkeypatch, process, popen_kwargs=popen_kwargs)
+
+    transcribe(input_path, output_path, device="cpu")
+
+    assert popen_kwargs[0]["creationflags"] == subprocess.CREATE_NO_WINDOW
 
 
 def test_transcribe_auto_selects_cpu_when_cuda_is_unavailable(

@@ -74,7 +74,7 @@ def transcribe(
     temporary_output = _temporary_output_path(destination)
 
     command = [
-        sys.executable,
+        _child_python_executable(),
         "-m",
         "transkun.transcribe",
         str(source),
@@ -115,6 +115,17 @@ def _cuda_available() -> bool:
     return torch.cuda.is_available()
 
 
+def _child_python_executable() -> str:
+    executable = Path(sys.executable)
+    if executable.name.casefold() == "pythonw.exe":
+        return str(executable.with_name("python.exe"))
+    return sys.executable
+
+
+def _creation_flags() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+
+
 def _temporary_output_path(destination: Path) -> Path:
     descriptor, name = tempfile.mkstemp(
         prefix=f".{destination.stem}.",
@@ -142,6 +153,7 @@ def _run_transkun(
             encoding="utf-8",
             errors="replace",
             bufsize=1,
+            creationflags=_creation_flags(),
         )
     except OSError as error:
         raise TranskunProcessError(f"Could not start Transkun: {error}") from error

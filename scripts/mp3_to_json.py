@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from sky_cotl_studio.ai.transkun_runner import Device
+from sky_cotl_studio.cli_output import safe_print
 from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.models import SongMeta
 from sky_cotl_studio.pipeline.job import (
@@ -123,7 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             device=args.device,
             keep_midi=args.keep_midi,
             midi_out=args.midi_out,
-            progress_callback=lambda message: print(f"[Transkun] {message}"),
+            progress_callback=lambda message: safe_print(f"[Transkun] {message}"),
             config=ConverterConfig(
                 grid_mode=args.grid_mode,
                 grid_ms=args.grid_ms,
@@ -132,48 +133,48 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
     except KeyboardInterrupt:
-        print("Conversion cancelled; temporary MIDI was removed.")
+        safe_print("Conversion cancelled; temporary MIDI was removed.")
         return 130
     except ConversionJobCancelled:
-        print("Conversion cancelled; temporary MIDI was removed.")
+        safe_print("Conversion cancelled; temporary MIDI was removed.")
         return 130
     except ConversionJobError as error:
-        print(f"Conversion failed: {error.failure.user_message}")
-        print(f"Technical cause: {error.failure.technical_cause}")
+        safe_print(f"Conversion failed: {error.failure.user_message}")
+        safe_print(f"Technical cause: {error.failure.technical_cause}")
         return 1
     except (OSError, TypeError, ValueError) as error:
-        print(f"Conversion failed: {error}")
+        safe_print(f"Conversion failed: {error}")
         return 1
 
     conversion = report.conversion
-    print(f"Device: {report.device}")
-    print(f"Leading silence trimmed: {report.leading_silence_ms:.1f} ms")
+    safe_print(f"Device: {report.device}")
+    safe_print(f"Leading silence trimmed: {report.leading_silence_ms:.1f} ms")
     for phase, seconds in report.phase_seconds.items():
-        print(f"{phase.replace('_', ' ').title()} time: {seconds:.3f} s")
-    print(f"Input MIDI notes: {conversion.stats.input_note_count}")
-    print(f"Transpose: {conversion.transpose}")
-    print(f"Grid mode: {args.grid_mode}")
+        safe_print(f"{phase.replace('_', ' ').title()} time: {seconds:.3f} s")
+    safe_print(f"Input MIDI notes: {conversion.stats.input_note_count}")
+    safe_print(f"Transpose: {conversion.transpose}")
+    safe_print(f"Grid mode: {args.grid_mode}")
     grid_text = (
         f"{conversion.grid_ms:g} ms"
         if conversion.grid_ms is not None
         else "not detected (unquantized)"
     )
-    print(f"Grid: {grid_text}")
+    safe_print(f"Grid: {grid_text}")
     for warning in conversion.warnings:
         if warning.message:
-            print(f"Warning: {warning.message}")
-    print(f"Output notes: {conversion.stats.output_note_count}")
-    print(f"Deduplicated notes: {conversion.stats.deduplicated_count}")
-    print(f"Chord-trimmed notes: {conversion.stats.chord_trimmed_count}")
-    print(f"Distinct onset times: {conversion.stats.distinct_time_count}")
-    print(f"Maximum chord size: {conversion.stats.max_chord_size}")
-    print(f"Folded pitches: {conversion.stats.folded_count}")
-    print(f"Out-of-scale pitches: {conversion.stats.out_of_scale_count}")
+            safe_print(f"Warning: {warning.message}")
+    safe_print(f"Output notes: {conversion.stats.output_note_count}")
+    safe_print(f"Deduplicated notes: {conversion.stats.deduplicated_count}")
+    safe_print(f"Chord-trimmed notes: {conversion.stats.chord_trimmed_count}")
+    safe_print(f"Distinct onset times: {conversion.stats.distinct_time_count}")
+    safe_print(f"Maximum chord size: {conversion.stats.max_chord_size}")
+    safe_print(f"Folded pitches: {conversion.stats.folded_count}")
+    safe_print(f"Out-of-scale pitches: {conversion.stats.out_of_scale_count}")
     if conversion.sky_notes:
-        print(f"Final note time: {conversion.sky_notes[-1].time_ms} ms")
+        safe_print(f"Final note time: {conversion.sky_notes[-1].time_ms} ms")
     if report.midi_path is not None:
-        print(f"Kept MIDI: {report.midi_path}")
-    print(f"Output JSON: {args.json_path}")
+        safe_print(f"Kept MIDI: {report.midi_path}")
+    safe_print(f"Output JSON: {args.json_path}")
     return 0
 
 

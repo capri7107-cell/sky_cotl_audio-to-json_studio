@@ -5,6 +5,7 @@ from sky_cotl_studio.converter.mapping import MappingWarning
 from sky_cotl_studio.gui.viewmodel import (
     ConversionForm,
     build_job_config,
+    format_completion_status,
     format_summary,
     grid_ms_enabled,
     validate_form,
@@ -146,3 +147,51 @@ def test_fixed_grid_ms_must_be_positive() -> None:
 def test_grid_ms_enabled_only_for_fixed_mode() -> None:
     assert grid_ms_enabled("fixed")
     assert not grid_ms_enabled("auto")
+
+
+def test_completion_status_formats_grid_and_out_of_scale_count() -> None:
+    conversion = ConversionResult(
+        sky_notes=[SkyNote(time_ms=0, key=1)],
+        transpose=0,
+        grid_ms=119.99,
+        warnings=[],
+        stats=ConversionStats(
+            input_note_count=1,
+            merged_onset_count=1,
+            deduplicated_count=0,
+            chord_trimmed_count=0,
+            output_note_count=649,
+            distinct_time_count=1,
+            max_chord_size=1,
+            folded_count=0,
+            out_of_scale_count=18,
+        ),
+    )
+
+    assert format_completion_status(conversion) == (
+        "Hoàn tất: 649 nốt, lưới 119,99 ms, 18 nốt ngoài thang âm"
+    )
+
+
+def test_completion_status_reports_grid_fallback() -> None:
+    conversion = ConversionResult(
+        sky_notes=[],
+        transpose=0,
+        grid_ms=None,
+        warnings=[],
+        stats=ConversionStats(
+            input_note_count=0,
+            merged_onset_count=0,
+            deduplicated_count=0,
+            chord_trimmed_count=0,
+            output_note_count=0,
+            distinct_time_count=0,
+            max_chord_size=0,
+            folded_count=0,
+            out_of_scale_count=0,
+        ),
+    )
+
+    assert format_completion_status(conversion) == (
+        "Hoàn tất: 0 nốt, lưới dự phòng"
+    )

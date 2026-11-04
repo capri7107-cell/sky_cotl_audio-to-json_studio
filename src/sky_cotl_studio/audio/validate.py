@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -109,6 +110,9 @@ def _run_process(
             text=True,
             check=False,
             timeout=_PROCESS_TIMEOUT_SECONDS,
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            ),
         )
     except subprocess.TimeoutExpired as error:
         raise error_type(f"{context}: process timed out") from error

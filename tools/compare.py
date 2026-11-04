@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from sky_cotl_studio.cli_output import safe_print
 from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.converter.convert import convert
 from sky_cotl_studio.exporters.sky_studio import load
@@ -212,18 +213,18 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 def _print_report(report: ComparisonReport) -> None:
-    print(f"Best offset: {report.offset_ms} ms")
-    print(
+    safe_print(f"Best offset: {report.offset_ms} ms")
+    safe_print(
         f"Onset matches: {report.matched_onsets}/{report.predicted_onsets} predicted, "
         f"{report.matched_onsets}/{report.reference_onsets} reference"
     )
-    print(f"Onset precision: {report.precision:.4f}")
-    print(f"Onset recall: {report.recall:.4f}")
-    print(f"Onset F1: {report.f1:.4f}")
-    print(f"Matched times with at least one key match: {report.same_key_time_ratio:.4f}")
-    print(f"Exact (time, key) pairs: {report.exact_note_pairs}")
-    print(f"Note count delta (converted - reference): {report.note_count_delta}")
-    print(f"Duration delta (converted - reference): {report.duration_delta_ms} ms")
+    safe_print(f"Onset precision: {report.precision:.4f}")
+    safe_print(f"Onset recall: {report.recall:.4f}")
+    safe_print(f"Onset F1: {report.f1:.4f}")
+    safe_print(f"Matched times with at least one key match: {report.same_key_time_ratio:.4f}")
+    safe_print(f"Exact (time, key) pairs: {report.exact_note_pairs}")
+    safe_print(f"Note count delta (converted - reference): {report.note_count_delta}")
+    safe_print(f"Duration delta (converted - reference): {report.duration_delta_ms} ms")
 
 
 def _notes_by_time(notes: Sequence[SkyNote]) -> dict[int, set[int]]:

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -178,3 +179,41 @@ def test_validate_mp3_reports_process_timeout(
 
     with pytest.raises(AudioProbeError, match="timed out"):
         validate_mp3(audio_path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows subprocess creation flag only")
+def test_validate_mp3_disables_console_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_path = tmp_path / "sample.mp3"
+    audio_path.write_bytes(b"synthetic mocked audio")
+    probe_result = SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps(
+            {
+                "streams": [
+                    {"codec_name": "mp3", "sample_rate": "22050", "channels": 1}
+                ],
+                "format": {"format_name": "mp3", "duration": "0.5"},
+            }
+        ),
+        stderr="",
+    )
+    run_kwargs: list[dict[str, object]] = []
+    results = [probe_result, SimpleNamespace(returncode=0, stdout="", stderr="")]
+
+    def fake_run(*_args: object, **kwargs: object) -> SimpleNamespace:
+        run_kwargs.append(kwargs)
+        return results.pop(0)
+
+    monkeypatch.setattr("sky_cotl_studio.audio.validate.shutil.which", lambda name: name)
+    monkeypatch.setattr("sky_cotl_studio.audio.validate.subprocess.run", fake_run)
+
+    validate_mp3(audio_path)
+
+    assert len(run_kwargs) == 2
+    assert all(
+        kwargs["creationflags"] == subprocess.CREATE_NO_WINDOW
+        for kwargs in run_kwargs
+    )

@@ -20,7 +20,10 @@ Mở PowerShell tại thư mục dự án và chạy:
 
 ## Mở ứng dụng
 
-Chạy `Chạy ứng dụng.bat` ở thư mục gốc.
+Chạy `Chạy ứng dụng.vbs` ở thư mục gốc để mở ứng dụng không có cửa sổ console.
+Để gỡ lỗi và xem lỗi khởi động trực tiếp, chạy `.\scripts\dev.ps1 app` trong PowerShell.
+Nhật ký lần chạy gần nhất được ghi đè tại `logs/last_run.log`; lỗi ngoài dự kiến được ghi
+thêm vào `logs/app_error.log`.
 
 ## Dòng lệnh
 

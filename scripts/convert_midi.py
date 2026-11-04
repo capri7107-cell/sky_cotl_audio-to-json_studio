@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from sky_cotl_studio.cli_output import safe_print
 from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.converter.convert import convert
 from sky_cotl_studio.exporters.sky_studio import export
@@ -51,19 +52,19 @@ def main() -> None:
     )
 
     json_path.write_text(export(metadata, result.sky_notes), encoding="utf-8")
-    print(f"Input MIDI notes: {result.stats.input_note_count}")
-    print(f"Transpose: {result.transpose}")
-    print(f"Grid mode: {config.grid_mode}")
+    safe_print(f"Input MIDI notes: {result.stats.input_note_count}")
+    safe_print(f"Transpose: {result.transpose}")
+    safe_print(f"Grid mode: {config.grid_mode}")
     grid_text = f"{result.grid_ms:g} ms" if result.grid_ms is not None else "not detected"
-    print(f"Grid: {grid_text}")
-    print(f"Output notes: {result.stats.output_note_count}")
-    print(f"Distinct onset times: {result.stats.distinct_time_count}")
-    print(f"Maximum chord size: {result.stats.max_chord_size}")
-    print(f"Folded pitches: {result.stats.folded_count}")
-    print(f"Out-of-scale pitches: {result.stats.out_of_scale_count}")
+    safe_print(f"Grid: {grid_text}")
+    safe_print(f"Output notes: {result.stats.output_note_count}")
+    safe_print(f"Distinct onset times: {result.stats.distinct_time_count}")
+    safe_print(f"Maximum chord size: {result.stats.max_chord_size}")
+    safe_print(f"Folded pitches: {result.stats.folded_count}")
+    safe_print(f"Out-of-scale pitches: {result.stats.out_of_scale_count}")
     if result.sky_notes:
-        print(f"Final note time: {result.sky_notes[-1].time_ms} ms")
-    print(f"Output JSON: {json_path}")
+        safe_print(f"Final note time: {result.sky_notes[-1].time_ms} ms")
+    safe_print(f"Output JSON: {json_path}")
 
 
 if __name__ == "__main__":

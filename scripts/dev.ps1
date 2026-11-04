@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app", "fidelity")]
+    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app", "app-silent", "fidelity")]
     [string]$Task,
     [Parameter(Position = 1)]
     [string]$InputPath,
@@ -123,5 +123,22 @@ switch ($Task) {
     }
     "app" {
         Invoke-PythonScript @("-m", "sky_cotl_studio.gui.app")
+    }
+    "app-silent" {
+        $pythonw = Join-Path (Split-Path -Parent $python) "pythonw.exe"
+        if (-not (Test-Path -LiteralPath $pythonw -PathType Leaf)) {
+            throw "pythonw.exe was not found next to the configured Python interpreter: $pythonw"
+        }
+        $srcPath = Join-Path (Get-Location) "src"
+        if ($env:PYTHONPATH) {
+            $env:PYTHONPATH = "$srcPath;$env:PYTHONPATH"
+        }
+        else {
+            $env:PYTHONPATH = $srcPath
+        }
+        Start-Process `
+            -FilePath $pythonw `
+            -ArgumentList @("-m", "sky_cotl_studio.gui.app") `
+            -WorkingDirectory (Get-Location)
     }
 }

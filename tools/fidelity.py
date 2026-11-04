@@ -11,6 +11,7 @@ from math import ceil, floor
 from pathlib import Path
 from statistics import median
 
+from sky_cotl_studio.cli_output import safe_print
 from sky_cotl_studio.converter.chords import merge_close_onsets
 from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.converter.convert import ConversionResult, convert
@@ -184,7 +185,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     reports = [analyze_midi(path) for path in discover_midi_files()]
     if not reports:
-        print("Không tìm thấy MIDI trong fixtures/ hoặc fixtures/local/.")
+        safe_print("Không tìm thấy MIDI trong fixtures/ hoặc fixtures/local/.")
         return
 
     headers = (
@@ -236,19 +237,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         max(len(header), *(len(row[index]) for row in rows))
         for index, header in enumerate(headers)
     ]
-    print(
+    safe_print(
         "| "
         + " | ".join(header.ljust(widths[i]) for i, header in enumerate(headers))
         + " |"
     )
-    print("|-" + "-|-".join("-" * width for width in widths) + "-|")
+    safe_print("|-" + "-|-".join("-" * width for width in widths) + "-|")
     for row in rows:
-        print(
+        safe_print(
             "| "
             + " | ".join(value.ljust(widths[i]) for i, value in enumerate(row))
             + " |"
         )
-    print(
+    safe_print(
         "| "
         + " | ".join(
             value.ljust(widths[index])
@@ -257,14 +258,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         + " |"
     )
 
-    print("\nCảnh báo:")
+    safe_print("\nCảnh báo:")
     warning_count = 0
     for report in reports:
         for warning in report.warnings:
             warning_count += 1
-            print(f"- {report.name}: {warning}")
+            safe_print(f"- {report.name}: {warning}")
     if not warning_count:
-        print("- Không có cảnh báo.")
+        safe_print("- Không có cảnh báo.")
 
 
 def _print_outlier_comparison() -> None:
@@ -314,20 +315,20 @@ def _print_outlier_comparison() -> None:
 
 def _print_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
     if not rows:
-        print("Không tìm thấy MIDI phù hợp để so sánh.")
+        safe_print("Không tìm thấy MIDI phù hợp để so sánh.")
         return
     widths = [
         max(len(header), *(len(row[index]) for row in rows))
         for index, header in enumerate(headers)
     ]
-    print(
+    safe_print(
         "| "
         + " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers))
         + " |"
     )
-    print("|-" + "-|-".join("-" * width for width in widths) + "-|")
+    safe_print("|-" + "-|-".join("-" * width for width in widths) + "-|")
     for row in rows:
-        print(
+        safe_print(
             "| "
             + " | ".join(value.ljust(widths[index]) for index, value in enumerate(row))
             + " |"
