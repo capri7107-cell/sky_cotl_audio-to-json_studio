@@ -1,10 +1,12 @@
 from pathlib import Path
 
+from sky_cotl_studio.audio.download import safe_video_filename
 from sky_cotl_studio.converter.convert import ConversionResult, ConversionStats
 from sky_cotl_studio.converter.mapping import MappingWarning
 from sky_cotl_studio.gui.viewmodel import (
     ConversionForm,
     build_job_config,
+    failure_message_vi,
     format_completion_status,
     format_summary,
     grid_ms_enabled,
@@ -32,13 +34,56 @@ def _form(**overrides: object) -> ConversionForm:
 
 def test_validate_form_requires_files_metadata_and_fixed_grid() -> None:
     assert validate_form(_form()) == ()
-    assert "Chọn tệp MP3 hợp lệ." in validate_form(
+    assert "Chọn tệp âm thanh hoặc nhập liên kết YouTube." in validate_form(
         _form(input_mp3="", output_json="")
     )
     assert any(
         "lưới" in message.lower()
         for message in validate_form(_form(grid_mode="fixed", grid_ms="bad"))
     )
+
+
+def test_youtube_form_allows_automatic_output_and_empty_video_title() -> None:
+    errors = validate_form(
+        _form(
+            input_mp3="https://youtu.be/example",
+            output_json="",
+            title="",
+        )
+    )
+
+    assert errors == ()
+    config = build_job_config(
+        _form(
+            input_mp3="https://youtu.be/example",
+            output_json="",
+            title="",
+        )
+    )
+    assert config.input_url == "https://youtu.be/example"
+    assert config.output_path_from_title
+    assert config.metadata.name == ""
+
+
+def test_video_title_is_made_safe_for_a_windows_filename() -> None:
+    assert safe_video_filename('Vết Mưa: "Live"') == "Vết Mưa_ _Live_"
+    assert safe_video_filename("...") == "youtube-video"
+
+
+def test_youtube_failures_are_translated_to_short_vietnamese_messages() -> None:
+    expected_messages = {
+        "The YouTube URL is invalid.": "Liên kết YouTube không hợp lệ hoặc không được hỗ trợ.",
+        "A network error interrupted the YouTube download.": "Không có mạng hoặc kết nối tải xuống bị gián đoạn.",
+        "The YouTube video is private or unavailable.": "Video ở chế độ riêng tư hoặc đã bị gỡ.",
+        "The YouTube video is age-restricted.": "Video bị giới hạn độ tuổi.",
+        "The YouTube video exceeds the duration limit.": "Video vượt quá giới hạn thời lượng cho phép.",
+        "Live streams are not supported.": "Không hỗ trợ video phát trực tiếp.",
+        "Please update yt-dlp.": "Hãy cập nhật yt-dlp.",
+        "No supported JavaScript runtime or video format was found.": "Thiếu JavaScript runtime hoặc không tìm thấy định dạng video hỗ trợ.",
+    }
+
+    for user_message, translated in expected_messages.items():
+        assert failure_message_vi(user_message) == translated
 
 
 def test_build_job_config_maps_form_values_to_job_configuration() -> None:

@@ -5,13 +5,13 @@ Hướng dẫn cho AI agent (VS Code / Copilot agent mode) khi làm việc trong
 
 ## 1. Dự án là gì
 
-Ứng dụng desktop chuyển **MP3 → MIDI → JSON** để chơi nhạc trong *Sky: Children of the Light*.
+Ứng dụng desktop chuyển **tệp âm thanh hoặc YouTube → MIDI → JSON** để chơi nhạc trong *Sky: Children of the Light*.
 
 Luồng xử lý (7 tầng, phụ thuộc một chiều từ trên xuống):
 
 1. `gui` — Desktop GUI (PySide6): nhập MP3, cấu hình, theo dõi tiến trình, xuất kết quả
 2. `pipeline` — điều phối các bước và quản lý trạng thái tác vụ
-3. `audio` — kiểm tra MP3, tiền xử lý
+3. `audio` — kiểm tra âm thanh, tải YouTube, tiền xử lý
 4. `ai` — Transkun (PyTorch, CUDA): MP3 → MIDI
 5. `midi` — đọc MIDI, trích xuất nốt, hiệu chỉnh dữ liệu
 6. `converter` — cao độ → Key 0–14, lượng tử hóa nhịp, hợp âm, timing
@@ -28,7 +28,8 @@ Phạm vi xuất của dự án dừng ở Sky Studio JSON một bè; không là
 - PySide6-Essentials (GUI), PyTorch + Transkun (AI), `pytest` (test), `ruff` + `mypy` (lint, type)
 - Đọc MIDI: dùng `mido` hoặc `pretty_midi`; nếu không có thì tự parse. Không giả định tempo cố định.
 - Tách dependency: `requirements-core.txt` (midi/converter/exporters/test),
-  `requirements-ai.txt` (torch, transkun) và `requirements-gui.txt` (PySide6-Essentials).
+  `requirements-ai.txt` (torch, transkun), `requirements-gui.txt` (PySide6-Essentials)
+  và `requirements-download.txt` (`yt-dlp[default]`).
 
 ## 3. Cấu trúc thư mục
 
@@ -163,8 +164,11 @@ Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
 - Interpreter duy nhất: `D:\My Folder\Environment\pytorch-env\Scripts\python.exe`.
 - Không gọi `py`, `python`, `pip` trần. Mọi lệnh chạy qua `scripts/dev.ps1`:
   `./scripts/dev.ps1 install | test | lint | types | all`
-- Không dùng `pip install --upgrade` trong môi trường này. Sau khi cài gói mới, chạy `python -m pip check`.
-- Dependency chia ba file: `requirements-core.txt`, `requirements-dev.txt`, `requirements-ai.txt`.
+- Không dùng `pip install --upgrade` trong môi trường này, ngoại trừ lệnh `update-ytdlp`
+  trong `scripts/dev.ps1` để chạy `pip install -U yt-dlp[default]`. Sau khi cài/cập nhật gói,
+  lệnh wrapper chạy `pip check`.
+- Các dependency được chia theo nhóm trong `requirements-core.txt`, `requirements-dev.txt`,
+  `requirements-ai.txt`, `requirements-gui.txt` và `requirements-download.txt`.
 
 ### GUI, nhật ký và tiến trình con
 
@@ -177,6 +181,8 @@ Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
   cùng thư mục để stdout/stderr có thể được đọc.
 - Mọi đầu ra console phải bỏ qua việc in khi `sys.stdout is None`; không gắn `StreamHandler`
   trực tiếp vào `sys.stdout` trong các chế độ chạy GUI.
+- Không import `yt_dlp` trong code; chỉ gọi `sys.executable -m yt_dlp` bằng subprocess trong
+  `audio/download.py`. Khi interpreter là `pythonw.exe`, dùng `python.exe` cùng thư mục.
 
 ## 9. Những điều không được làm
 

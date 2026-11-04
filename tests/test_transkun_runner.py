@@ -71,6 +71,10 @@ def _setup_runner(
         lambda _path: SimpleNamespace(duration_seconds=1.0, sample_rate=44100, channels=1),
     )
     monkeypatch.setattr(
+        "sky_cotl_studio.ai.transkun_runner.validate_audio",
+        lambda _path: SimpleNamespace(duration_seconds=1.0, sample_rate=48000, channels=2),
+    )
+    monkeypatch.setattr(
         "sky_cotl_studio.ai.transkun_runner.shutil.which",
         lambda name: ffmpeg if name == "ffmpeg" else None,
     )
@@ -109,6 +113,29 @@ def test_transcribe_uses_current_interpreter_and_auto_device(
     assert "starting transcription" in progress
     assert "Transkun completed" in progress[-1]
     assert process.waited
+
+
+def test_transcribe_accepts_48khz_wav_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_path = tmp_path / "source.wav"
+    output_path = tmp_path / "output.mid"
+    input_path.write_bytes(b"wav")
+    process = _FakeProcess([], create_output=output_path)
+    _setup_runner(monkeypatch, process)
+    validated_paths: list[Path] = []
+    monkeypatch.setattr(
+        "sky_cotl_studio.ai.transkun_runner.validate_audio",
+        lambda path: (
+            validated_paths.append(Path(path)),
+            SimpleNamespace(duration_seconds=1.0, sample_rate=48000, channels=2),
+        )[1],
+    )
+
+    transcribe(input_path, output_path, device="cpu")
+
+    assert validated_paths == [input_path]
 
 
 def test_transcribe_uses_python_executable_when_started_with_pythonw(

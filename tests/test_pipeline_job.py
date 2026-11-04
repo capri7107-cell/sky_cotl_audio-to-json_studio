@@ -6,6 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from sky_cotl_studio.ai.transkun_runner import TranskunCancelledError
+from sky_cotl_studio.audio.download import (
+    DownloadCancelledError,
+    DownloadError,
+    DownloadProgress,
+    DownloadResult,
+)
 from sky_cotl_studio.converter.convert import ConversionResult, ConversionStats
 from sky_cotl_studio.models import Note, SkyNote, SongMeta
 from sky_cotl_studio.pipeline.job import (
@@ -200,11 +206,150 @@ def test_job_cancel_during_transcription_kills_and_cleans_staged_midi(
     assert not (tmp_path / "output.json").exists()
 
 
+def test_youtube_job_reports_download_progress_title_and_cleans_temp_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_services(monkeypatch)
+    temporary_directories: list[Path] = []
+    exported_names: list[str] = []
+
+    def download(
+        _url: str,
+        temporary_directory: Path,
+        **kwargs: object,
+    ) -> DownloadResult:
+        temporary_directories.append(temporary_directory)
+        audio_path = temporary_directory / "source.wav"
+        audio_path.write_bytes(b"wav")
+        callback = kwargs["progress_callback"]
+        assert callable(callback)
+        callback(DownloadProgress(percentage=42.5, message="Downloading", title="Vết Mưa"))
+        return DownloadResult(audio_path=audio_path, title="Vết Mưa")
+
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.download_youtube", download)
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.validate_audio",
+        lambda path: (
+            calls.append("validate"),
+            SimpleNamespace(duration_seconds=1.0, sample_rate=48000, channels=2),
+        )[1],
+    )
+
+    def transcribe(
+        audio_path: Path,
+        midi_path: Path,
+        **kwargs: object,
+    ) -> Path:
+        assert audio_path.suffix == ".wav"
+        audio_info = kwargs["validated_audio"]
+        assert audio_info.sample_rate == 48000
+        calls.append("transcribe")
+        midi_path.write_bytes(b"midi")
+        return midi_path
+
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.transcribe",
+        transcribe,
+    )
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.export",
+        lambda metadata, notes: (
+            exported_names.append(metadata.name),
+            json.dumps([{"songNotes": [{"time": note.time_ms} for note in notes]}]),
+        )[1],
+    )
+    config = ConversionJobConfig(
+        input_path=None,
+        input_url="https://youtu.be/example",
+        output_path=tmp_path / "video.json",
+        output_path_from_title=True,
+        metadata=_meta().__class__(
+            name="",
+            author="",
+            transcribed_by="",
+            is_composed=False,
+            bpm=500,
+            bits_per_page=16,
+            pitch_level=2,
+            is_encrypted=False,
+        ),
+        device="cpu",
+    )
+    events = []
+    job = ConversionJob(config, progress_callback=events.append)
+
+    job.start()
+    assert job.wait(timeout=5)
+
+    transitions = [
+        event.phase
+        for index, event in enumerate(events)
+        if index == 0 or event.phase is not events[index - 1].phase
+    ]
+    assert transitions == [
+        JobState.DOWNLOADING,
+        JobState.VALIDATING,
+        JobState.TRANSCRIBING,
+        JobState.CONVERTING,
+        JobState.EXPORTING,
+        JobState.DONE,
+    ]
+    assert any(event.percentage == 42.5 for event in events)
+    assert any(event.title == "Vết Mưa" for event in events)
+    assert job.result is not None
+    assert job.result.json_path == tmp_path / "Vết Mưa.json"
+    assert exported_names == ["Vết Mưa"]
+    assert len(temporary_directories) == 1
+    assert not temporary_directories[0].exists()
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_youtube_job_cleans_temporary_directory_on_error_or_cancel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cancelled: bool,
+) -> None:
+    _patch_services(monkeypatch)
+    temporary_directories: list[Path] = []
+    entered_download = threading.Event()
+
+    def download(_url: str, temporary_directory: Path, **kwargs: object) -> object:
+        temporary_directories.append(temporary_directory)
+        (temporary_directory / "source.wav").write_bytes(b"partial")
+        entered_download.set()
+        if cancelled:
+            cancel_event = kwargs["cancel_event"]
+            assert isinstance(cancel_event, threading.Event)
+            assert cancel_event.wait(timeout=5)
+            raise DownloadCancelledError()
+        raise DownloadError("download failed", category="network")
+
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.download_youtube", download)
+    config = ConversionJobConfig(
+        input_path=None,
+        input_url="https://youtu.be/example",
+        output_path=tmp_path / "video.json",
+        metadata=_meta(),
+        device="cpu",
+    )
+    job = ConversionJob(config)
+
+    job.start()
+    assert entered_download.wait(timeout=5)
+    if cancelled:
+        job.cancel()
+    assert job.wait(timeout=5)
+
+    assert not temporary_directories[0].exists()
+    assert job.state is (JobState.CANCELLED if cancelled else JobState.FAILED)
+
+
 @pytest.mark.parametrize(
     ("failure_stage", "expected_user_message"),
     [
-        ("validate", "The input MP3 could not be validated."),
-        ("transcribe", "The MP3 could not be transcribed."),
+        ("validate", "The input audio could not be validated."),
+        ("transcribe", "The audio could not be transcribed."),
         ("read_midi", "The generated MIDI could not be read."),
         ("trim", "The generated MIDI could not be processed."),
         ("convert", "The notes could not be converted."),
@@ -286,7 +431,7 @@ def test_job_callback_messages_follow_pipeline_order(
     job.start()
     assert job.wait(timeout=5)
 
-    assert messages[0] == "Validating MP3"
+    assert messages[0] == "Validating audio"
     assert any("Transkun" in message for message in messages)
     assert messages.index("Converting MIDI notes") < messages.index("Exporting JSON")
     assert messages[-1] == "Conversion complete"

@@ -1,4 +1,4 @@
-"""Minimal Vietnamese desktop interface for MP3-to-Sky-JSON conversion."""
+"""Minimal Vietnamese desktop interface for audio-to-Sky-JSON conversion."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from sky_cotl_studio.gui.viewmodel import (
     grid_mode_from_label,
     grid_ms_enabled,
     validate_form,
+    youtube_output_suggestion,
 )
 from sky_cotl_studio.pipeline.job import (
     ConversionJob,
@@ -44,7 +45,8 @@ _LOG_DIRECTORY = Path(__file__).resolve().parents[3] / "logs"
 
 _STATE_LABELS = {
     JobState.PENDING: "Chờ bắt đầu",
-    JobState.VALIDATING: "Đang kiểm tra MP3",
+    JobState.DOWNLOADING: "Đang tải video YouTube",
+    JobState.VALIDATING: "Đang kiểm tra âm thanh",
     JobState.TRANSCRIBING: "Đang chuyển MP3 thành MIDI",
     JobState.CONVERTING: "Đang xử lý nốt",
     JobState.EXPORTING: "Đang xuất JSON",
@@ -55,14 +57,14 @@ _STATE_LABELS = {
 
 
 class Mp3PathEdit(QLineEdit):
-    """Line edit that accepts a dropped MP3 path."""
+    """Line edit that accepts a dropped audio file."""
 
     path_dropped = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setPlaceholderText("Chọn hoặc kéo thả tệp MP3 vào đây")
+        self.setPlaceholderText("Chọn tệp âm thanh hoặc dán liên kết YouTube")
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -76,7 +78,16 @@ class Mp3PathEdit(QLineEdit):
             event.ignore()
             return
         path = urls[0].toLocalFile()
-        if path.lower().endswith(".mp3"):
+        if Path(path).suffix.lower() in {
+            ".mp3",
+            ".wav",
+            ".m4a",
+            ".flac",
+            ".ogg",
+            ".opus",
+            ".aac",
+            ".wma",
+        }:
             self.setText(path)
             self.path_dropped.emit(path)
             event.acceptProposedAction()
@@ -97,7 +108,7 @@ class MainWindow(QMainWindow):
         self.progress_received.connect(self._handle_progress)
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Sky CotL — MP3 sang JSON")
+        self.setWindowTitle("Sky CotL — Âm thanh sang JSON")
         self.setMinimumSize(520, 360)
         self.resize(600, 400)
 
@@ -108,10 +119,10 @@ class MainWindow(QMainWindow):
         self.input_path_edit = Mp3PathEdit()
         input_row = QHBoxLayout()
         input_row.addWidget(self.input_path_edit)
-        input_browse_button = QPushButton("Chọn MP3…")
+        input_browse_button = QPushButton("Chọn tệp…")
         input_browse_button.clicked.connect(self._browse_mp3)
         input_row.addWidget(input_browse_button)
-        form_layout.addRow("Tệp MP3:", input_row)
+        form_layout.addRow("Tệp âm thanh hoặc liên kết YouTube:", input_row)
 
         self.output_path_edit = QLineEdit()
         self.output_path_edit.setPlaceholderText("Đường dẫn JSON đầu ra")
@@ -183,9 +194,9 @@ class MainWindow(QMainWindow):
     def _browse_mp3(self) -> None:
         path, _selected_filter = QFileDialog.getOpenFileName(
             self,
-            "Chọn tệp MP3",
+            "Chọn tệp âm thanh",
             "",
-            "Tệp MP3 (*.mp3)",
+            "Tệp âm thanh (*.mp3 *.wav *.m4a *.flac *.ogg *.opus *.aac *.wma);;Tất cả tệp (*)",
         )
         if path:
             self.input_path_edit.setText(path)
@@ -237,7 +248,10 @@ class MainWindow(QMainWindow):
         try:
             config = build_job_config(form)
             self._start_run_log()
-            self._log_info("Bắt đầu chuyển đổi: %s", config.input_path)
+            self._log_info(
+                "Bắt đầu chuyển đổi: %s",
+                config.input_url or config.input_path,
+            )
             job = ConversionJob(
                 config,
                 progress_callback=self.progress_received.emit,
@@ -255,8 +269,13 @@ class MainWindow(QMainWindow):
         self._job = job
         self.start_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
-        self.progress_bar.setRange(0, 0)
-        self.status_label.setText(_STATE_LABELS[JobState.VALIDATING])
+        if config.input_url is not None:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            self.status_label.setText(_STATE_LABELS[JobState.DOWNLOADING])
+        else:
+            self.progress_bar.setRange(0, 0)
+            self.status_label.setText(_STATE_LABELS[JobState.VALIDATING])
 
     @Slot()
     def _cancel_job(self) -> None:
@@ -270,6 +289,23 @@ class MainWindow(QMainWindow):
         if not isinstance(event, JobProgress):
             return
         self.status_label.setText(_STATE_LABELS[event.phase])
+        if event.title:
+            if not self.title_edit.text().strip():
+                self.title_edit.setText(event.title)
+            if not self.output_path_edit.text().strip():
+                self.output_path_edit.setText(youtube_output_suggestion(event.title))
+        if event.phase is JobState.DOWNLOADING:
+            if event.percentage is None:
+                if self.progress_bar.maximum() != 100:
+                    self.progress_bar.setRange(0, 0)
+            else:
+                self.status_label.setText(
+                    f"{_STATE_LABELS[event.phase]} ({event.percentage:.0f}%)"
+                )
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(round(event.percentage))
+        elif event.phase not in (JobState.DONE, JobState.FAILED, JobState.CANCELLED):
+            self.progress_bar.setRange(0, 0)
         self._log_info("%s: %s", event.phase.value, event.message)
         if event.phase in (JobState.DONE, JobState.FAILED, JobState.CANCELLED):
             self.progress_bar.setRange(0, 1)

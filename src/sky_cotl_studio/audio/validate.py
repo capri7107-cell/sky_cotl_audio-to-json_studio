@@ -45,12 +45,21 @@ class AudioInfo:
 _PROCESS_TIMEOUT_SECONDS = 60
 
 
+def validate_audio(path: str | Path) -> AudioInfo:
+    """Validate a ffprobe-readable audio file and return its stream metadata."""
+    return _validate_audio(path, mp3_only=False)
+
+
 def validate_mp3(path: str | Path) -> AudioInfo:
-    """Validate an MP3 file, decode it, and return its duration and stream format."""
+    """Compatibility wrapper that validates an MP3 specifically."""
+    return _validate_audio(path, mp3_only=True)
+
+
+def _validate_audio(path: str | Path, *, mp3_only: bool) -> AudioInfo:
     audio_path = Path(path)
     if not audio_path.exists() or not audio_path.is_file():
         raise AudioFileNotFoundError(f"Audio file does not exist: {audio_path}")
-    if audio_path.suffix.lower() != ".mp3":
+    if mp3_only and audio_path.suffix.lower() != ".mp3":
         raise UnsupportedAudioFormatError(f"Expected an MP3 file with .mp3 extension: {audio_path}")
 
     ffprobe = shutil.which("ffprobe")
@@ -78,7 +87,7 @@ def validate_mp3(path: str | Path) -> AudioInfo:
         AudioProbeError,
         "Could not read audio metadata",
     )
-    metadata = _parse_metadata(probe_result.stdout, audio_path)
+    metadata = _parse_metadata(probe_result.stdout, audio_path, mp3_only=mp3_only)
 
     _run_process(
         [
@@ -125,7 +134,7 @@ def _run_process(
     return result
 
 
-def _parse_metadata(output: str, path: Path) -> AudioInfo:
+def _parse_metadata(output: str, path: Path, *, mp3_only: bool) -> AudioInfo:
     try:
         data = json.loads(output)
     except json.JSONDecodeError as error:
@@ -146,7 +155,9 @@ def _parse_metadata(output: str, path: Path) -> AudioInfo:
     stream = streams[0]
     codec_name = stream.get("codec_name")
     format_name = container.get("format_name")
-    if codec_name != "mp3" or not isinstance(format_name, str) or "mp3" not in format_name:
+    if not isinstance(codec_name, str) or not codec_name or not isinstance(format_name, str):
+        raise InvalidAudioMetadataError(f"Incomplete audio metadata: {path}")
+    if mp3_only and (codec_name != "mp3" or "mp3" not in format_name):
         raise InvalidAudioMetadataError(f"Input is not an MP3 audio stream: {path}")
 
     try:

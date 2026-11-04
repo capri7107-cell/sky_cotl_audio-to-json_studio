@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app", "app-silent", "fidelity")]
+    [ValidateSet("install", "update-ytdlp", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app", "app-silent", "fidelity")]
     [string]$Task,
     [Parameter(Position = 1)]
     [string]$InputPath,
@@ -61,6 +61,11 @@ switch ($Task) {
     "install" {
         Invoke-PythonModule @("-m", "pip", "install", "-r", "requirements-core.txt")
         Invoke-PythonModule @("-m", "pip", "install", "-r", "requirements-dev.txt")
+        Invoke-PythonModule @("-m", "pip", "install", "-r", "requirements-download.txt")
+        Invoke-PythonModule @("-m", "pip", "check")
+    }
+    "update-ytdlp" {
+        Invoke-PythonModule @("-m", "pip", "install", "-U", "yt-dlp[default]")
         Invoke-PythonModule @("-m", "pip", "check")
     }
     "test" {

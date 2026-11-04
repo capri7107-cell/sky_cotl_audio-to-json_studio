@@ -13,6 +13,7 @@ from sky_cotl_studio.audio.validate import (
     AudioProbeError,
     InvalidAudioMetadataError,
     UnsupportedAudioFormatError,
+    validate_audio,
     validate_mp3,
 )
 
@@ -71,6 +72,26 @@ def test_validate_mp3_returns_decoded_audio_metadata(
     assert len(commands) == 2
     assert str(audio_path) in commands[0]
     assert str(audio_path) in commands[1]
+
+
+def test_validate_audio_accepts_wav_at_48khz(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audio_path = tmp_path / "source.wav"
+    audio_path.write_bytes(b"synthetic wav")
+    commands = _mock_ffmpeg(
+        monkeypatch,
+        {
+            "streams": [{"codec_name": "pcm_s16le", "sample_rate": "48000", "channels": 2}],
+            "format": {"format_name": "wav", "duration": "12.5"},
+        },
+    )
+
+    info = validate_audio(audio_path)
+
+    assert info == AudioInfo(duration_seconds=12.5, sample_rate=48000, channels=2)
+    assert len(commands) == 2
 
 
 def test_validate_mp3_rejects_missing_file(tmp_path: Path) -> None:

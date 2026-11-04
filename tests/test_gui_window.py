@@ -29,6 +29,17 @@ assert window.start_button.isEnabled()
 assert not hasattr(window, "summary_view")
 assert not hasattr(window, "log_view")
 assert window.status_label.text() == "Ch\u1edd b\u1eaft \u0111\u1ea7u"
+assert any(
+    label.text() == "T\u1ec7p \u00e2m thanh ho\u1eb7c li\u00ean k\u1ebft YouTube:"
+    for label in window.findChildren(type(window.status_label))
+)
+window._handle_progress(
+    JobProgress(JobState.DOWNLOADING, "Downloading", 42.5, "V\u1ebft M\u01b0a")
+)
+assert window.status_label.text() == "\u0110ang t\u1ea3i video YouTube (42%)"
+assert window.progress_bar.value() == 42
+assert window.title_edit.text() == "V\u1ebft M\u01b0a"
+assert Path(window.output_path_edit.text()).name == "V\u1ebft M\u01b0a.json"
 
 conversion = ConversionResult(
     sky_notes=[SkyNote(time_ms=0, key=1)],

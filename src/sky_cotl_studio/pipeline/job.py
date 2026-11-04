@@ -1,4 +1,4 @@
-"""Background orchestration for the MP3-to-Sky-JSON conversion pipeline."""
+"""Background orchestration for audio-to-Sky-JSON conversion."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Literal, TypeVar
@@ -19,7 +19,19 @@ from sky_cotl_studio.ai.transkun_runner import (
     resolve_device,
     transcribe,
 )
-from sky_cotl_studio.audio.validate import AudioValidationError, validate_mp3
+from sky_cotl_studio.audio.download import (
+    DEFAULT_YOUTUBE_DOMAINS,
+    DownloadCancelledError,
+    DownloadError,
+    DownloadProgress,
+    download_youtube,
+    safe_video_filename,
+)
+from sky_cotl_studio.audio.validate import (
+    AudioValidationError,
+    validate_audio,
+    validate_mp3,
+)
 from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.converter.convert import ConversionResult, convert
 from sky_cotl_studio.exporters.sky_studio import export
@@ -32,6 +44,7 @@ class JobState(Enum):
     """Lifecycle state for a conversion job."""
 
     PENDING = "pending"
+    DOWNLOADING = "downloading"
     VALIDATING = "validating"
     TRANSCRIBING = "transcribing"
     CONVERTING = "converting"
@@ -45,9 +58,11 @@ class JobState(Enum):
 class ConversionJobConfig:
     """Input, output, converter, device, and metadata settings for a job."""
 
-    input_path: Path
+    input_path: Path | None
     output_path: Path
     metadata: SongMeta
+    input_url: str | None = None
+    output_path_from_title: bool = False
     grid_mode: Literal["auto", "fixed"] = "auto"
     grid_ms: float = 120
     device: Device | None = None
@@ -57,6 +72,8 @@ class ConversionJobConfig:
     max_chord: int = 4
     grid_outliers: Literal["snap", "keep"] = "snap"
     outlier_ms: float = 40
+    max_download_duration_seconds: float = 900
+    allowed_youtube_domains: tuple[str, ...] = DEFAULT_YOUTUBE_DOMAINS
 
     def __post_init__(self) -> None:
         ConverterConfig(
@@ -69,10 +86,19 @@ class ConversionJobConfig:
         )
         if self.device not in (None, "cpu", "cuda"):
             raise ValueError("device must be 'cpu', 'cuda', or None")
-        if self.midi_out is not None and _same_path(self.input_path, self.midi_out):
-            raise ValueError("MIDI output path must differ from the MP3 input path")
-        if _same_path(self.input_path, self.output_path):
-            raise ValueError("JSON output path must differ from the MP3 input path")
+        if (self.input_path is None) == (self.input_url is None):
+            raise ValueError("Provide exactly one local input path or YouTube URL")
+        if self.input_path is not None and self.midi_out is not None and _same_path(
+            self.input_path,
+            self.midi_out,
+        ):
+            raise ValueError("MIDI output path must differ from the input audio path")
+        if self.input_path is not None and _same_path(self.input_path, self.output_path):
+            raise ValueError("JSON output path must differ from the input audio path")
+        if self.input_url is None and self.output_path_from_title:
+            raise ValueError("Automatic title output naming requires a YouTube URL")
+        if self.max_download_duration_seconds <= 0:
+            raise ValueError("max_download_duration_seconds must be positive")
         retained_midi_path = self.retained_midi_path
         if retained_midi_path is not None and _same_path(
             retained_midi_path,
@@ -97,6 +123,7 @@ class JobProgress:
     phase: JobState
     message: str
     percentage: float | None = None
+    title: str | None = None
 
 
 ProgressCallback = Callable[[JobProgress], None]
@@ -221,26 +248,60 @@ class ConversionJob:
 
         staged_midi: Path | None = None
         staged_json: Path | None = None
+        temporary_directory: tempfile.TemporaryDirectory | None = None
         try:
             phase_seconds: dict[str, float] = {}
-            self._set_state(JobState.VALIDATING, "Validating MP3", 0)
+            audio_path = self.config.input_path
+            metadata = self.config.metadata
+            output_path = self.config.output_path
+            if self.config.input_url is not None:
+                self._operation = "download"
+                self._set_state(JobState.DOWNLOADING, "Starting YouTube download", 0)
+                temporary_directory = tempfile.TemporaryDirectory(
+                    prefix="sky-cotl-download-"
+                )
+                download_result, phase_seconds["download"] = _measure(
+                    lambda: download_youtube(
+                        self.config.input_url or "",
+                        Path(temporary_directory.name),
+                        max_duration_seconds=self.config.max_download_duration_seconds,
+                        allowed_domains=self.config.allowed_youtube_domains,
+                        progress_callback=self._download_progress,
+                        cancel_event=self._cancel_event,
+                    )
+                )
+                audio_path = download_result.audio_path
+                title = download_result.title.strip()
+                if title:
+                    if not metadata.name.strip():
+                        metadata = replace(metadata, name=title)
+                    if self.config.output_path_from_title:
+                        output_path = output_path.with_name(
+                            f"{safe_video_filename(title)}.json"
+                        )
+                _check_cancel(self._cancel_event)
+
+            self._set_state(JobState.VALIDATING, "Validating audio", 0)
             _check_cancel(self._cancel_event)
+            if audio_path is None:
+                raise RuntimeError("The job has no audio input")
+            validate = validate_mp3 if audio_path.suffix.lower() == ".mp3" else validate_audio
             audio_info, phase_seconds["validate"] = _measure(
-                lambda: validate_mp3(self.config.input_path)
+                lambda: validate(audio_path)
             )
 
             self._operation = "transcribe"
-            self._set_state(JobState.TRANSCRIBING, "Transcribing MP3", 10)
+            self._set_state(JobState.TRANSCRIBING, "Transcribing audio", 10)
             device = resolve_device(self.config.device)
             transcription_path = _temporary_path(
-                self.config.output_path.parent,
-                self.config.output_path.stem,
+                output_path.parent,
+                output_path.stem,
                 ".mid",
             )
             staged_midi = transcription_path
             _, phase_seconds["transcribe"] = _measure(
                 lambda: transcribe(
-                    self.config.input_path,
+                    audio_path,
                     transcription_path,
                     device=device,
                     progress_callback=self._transcription_progress,
@@ -283,26 +344,32 @@ class ConversionJob:
             self._operation = "export"
             self._set_state(JobState.EXPORTING, "Exporting JSON", 80)
             json_content, phase_seconds["export"] = _measure(
-                lambda: export(self.config.metadata, conversion.sky_notes)
+                lambda: export(metadata, conversion.sky_notes)
             )
             _check_cancel(self._cancel_event)
             staged_json = _temporary_path(
-                self.config.output_path.parent,
-                self.config.output_path.stem,
+                output_path.parent,
+                output_path.stem,
                 ".json",
             )
             staged_json.write_text(json_content, encoding="utf-8")
 
-            retained_midi_path = self.config.retained_midi_path
+            retained_midi_path = (
+                self.config.midi_out
+                if self.config.midi_out is not None
+                else output_path.with_suffix(".mid")
+                if self.config.keep_midi
+                else None
+            )
             if retained_midi_path is not None:
                 retained_midi_path.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(transcription_path, retained_midi_path)
                 staged_midi = None
-            os.replace(staged_json, self.config.output_path)
+            os.replace(staged_json, output_path)
             staged_json = None
 
             result = ConversionJobResult(
-                json_path=self.config.output_path,
+                json_path=output_path,
                 midi_path=retained_midi_path,
                 conversion=conversion,
                 device=device,
@@ -314,6 +381,11 @@ class ConversionJob:
             self._set_state(JobState.DONE, "Conversion complete", 100)
         except _JobCancelled:
             self._set_terminal(JobState.CANCELLED, notify=True)
+        except DownloadCancelledError as error:
+            if self._cancel_event.is_set():
+                self._set_terminal(JobState.CANCELLED, notify=True)
+            else:
+                self._record_failure(error)
         except TranskunCancelledError as error:
             if self._cancel_event.is_set():
                 self._set_terminal(JobState.CANCELLED, notify=True)
@@ -331,12 +403,27 @@ class ConversionJob:
                         cleanup_error = error
             if cleanup_error is not None:
                 self._record_failure(cleanup_error)
+            if temporary_directory is not None:
+                try:
+                    temporary_directory.cleanup()
+                except OSError as error:
+                    self._record_failure(error)
             with _ACTIVE_JOB_LOCK:
                 if _ACTIVE_JOB is self:
                     _ACTIVE_JOB = None
 
     def _transcription_progress(self, message: str) -> None:
         self._notify(JobProgress(JobState.TRANSCRIBING, message, None))
+
+    def _download_progress(self, progress: DownloadProgress) -> None:
+        self._notify(
+            JobProgress(
+                JobState.DOWNLOADING,
+                progress.message or "Downloading YouTube audio",
+                progress.percentage,
+                progress.title,
+            )
+        )
 
     def _set_state(
         self,
@@ -429,10 +516,27 @@ def _same_path(first: str | Path, second: str | Path) -> bool:
 
 
 def _user_message(stage: str, error: BaseException) -> str:
+    if isinstance(error, DownloadError):
+        category_messages = {
+            "invalid_url": "The YouTube URL is invalid.",
+            "network": "A network error interrupted the YouTube download.",
+            "unavailable": "The YouTube video is private or unavailable.",
+            "age_restricted": "The YouTube video is age-restricted.",
+            "too_long": "The YouTube video exceeds the duration limit.",
+            "livestream": "Live streams are not supported.",
+            "outdated": "Please update yt-dlp.",
+            "javascript_runtime": "No supported JavaScript runtime or video format was found.",
+        }
+        return category_messages.get(
+            error.category,
+            "The YouTube video could not be downloaded.",
+        )
+    if stage == "download":
+        return "The YouTube video could not be downloaded."
     if stage == "validate" or isinstance(error, AudioValidationError):
-        return "The input MP3 could not be validated."
+        return "The input audio could not be validated."
     if stage == "transcribe" or isinstance(error, TranskunError):
-        return "The MP3 could not be transcribed."
+        return "The audio could not be transcribed."
     if stage == "read_midi":
         return "The generated MIDI could not be read."
     if stage == "convert":

@@ -14,8 +14,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = '-m "not gpu"'
-markers = ["gpu: optional integration test requiring the installed Transkun model"]
+addopts = '-m "not gpu and not network"'
+markers = [
+    "gpu: optional integration test requiring the installed Transkun model",
+    "network: optional integration test requiring internet access",
+]
 
 [tool.ruff]
 target-version = "py311"

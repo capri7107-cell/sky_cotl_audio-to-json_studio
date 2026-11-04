@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, TextIO
 
-from sky_cotl_studio.audio.validate import AudioInfo, validate_mp3
+from sky_cotl_studio.audio.validate import AudioInfo, validate_audio, validate_mp3
 
 Device = Literal["cpu", "cuda"]
 ProgressCallback = Callable[[str], None]
@@ -54,7 +54,7 @@ def transcribe(
     cancel_event: threading.Event | None = None,
     validated_audio: AudioInfo | None = None,
 ) -> Path:
-    """Validate an MP3 and transcribe it to MIDI in a cancellable subprocess."""
+    """Validate an audio file and transcribe it to MIDI in a cancellable subprocess."""
     source = Path(input_path)
     destination = Path(output_path)
 
@@ -66,7 +66,8 @@ def transcribe(
         raise TranskunCancelledError("Transkun transcription was cancelled before it started")
 
     if validated_audio is None:
-        validate_mp3(source)
+        validate = validate_mp3 if source.suffix.lower() == ".mp3" else validate_audio
+        validate(source)
     elif not isinstance(validated_audio, AudioInfo):
         raise TypeError("validated_audio must be an AudioInfo instance")
     selected_device = resolve_device(device)

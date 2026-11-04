@@ -1,13 +1,14 @@
 # Sky CotL MP3 to JSON Studio
 
-Ứng dụng desktop chuyển MP3 thành MIDI bằng Transkun, rồi chuyển MIDI thành Sky Studio JSON
-một bè để chơi trong Sky: Children of the Light.
+Ứng dụng desktop chuyển tệp âm thanh hoặc video YouTube thành MIDI bằng Transkun, rồi chuyển
+MIDI thành Sky Studio JSON một bè để chơi trong Sky: Children of the Light.
 
 ## Yêu cầu
 
 - Windows.
 - Python trong môi trường `pytorch-env` của dự án.
 - `ffmpeg` và `ffprobe` có trong `PATH`.
+- `yt-dlp` (cài từ `requirements-download.txt`) để tải âm thanh YouTube.
 - GPU CUDA là tùy chọn; có thể chạy bằng CPU.
 
 ## Cài đặt
@@ -42,6 +43,10 @@ Các tùy chọn hiện có:
   giữ onset lệch lưới quá ngưỡng đã đặt.
 - `--keep-midi`: giữ MIDI trung gian cạnh JSON.
 - `--midi-out PATH`: lưu MIDI trung gian tại đường dẫn chỉ định.
+
+Có thể nhập URL YouTube vào ô nguồn của GUI. Mặc định chỉ chấp nhận `youtube.com`,
+`music.youtube.com` và `youtu.be`; playlist, livestream và video dài hơn 15 phút không được tải.
+Để cập nhật yt-dlp, chạy `.\scripts\dev.ps1 update-ytdlp`.
 
 Ví dụ dùng CUDA và giữ MIDI:
 
