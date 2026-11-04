@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app")]
+    [ValidateSet("install", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app", "fidelity")]
     [string]$Task,
     [Parameter(Position = 1)]
     [string]$InputPath,
@@ -68,6 +68,9 @@ switch ($Task) {
         if ($InputPath) {
             $testArguments += $InputPath
         }
+        if ($ExtraArguments) {
+            $testArguments += $ExtraArguments
+        }
         Invoke-PythonModule $testArguments
     }
     "test-gpu" {
@@ -95,7 +98,14 @@ switch ($Task) {
         Invoke-PythonScript $convertArguments
     }
     "compare" {
-        Invoke-PythonScript @("tools/compare.py")
+        $compareArguments = @("tools/compare.py")
+        if ($ExtraArguments) {
+            $compareArguments += $ExtraArguments
+        }
+        Invoke-PythonScript $compareArguments
+    }
+    "fidelity" {
+        Invoke-PythonScript @("tools/fidelity.py")
     }
     "mp3" {
         if (-not $InputPath -or -not $OutputPath) {

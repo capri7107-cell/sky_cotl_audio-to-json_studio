@@ -25,3 +25,4 @@ dist/
 *.mp3
 *.wav
 *.flac
+fixtures/local/

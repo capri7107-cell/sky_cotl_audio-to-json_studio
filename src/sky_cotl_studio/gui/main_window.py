@@ -30,6 +30,7 @@ from sky_cotl_studio.gui.viewmodel import (
     device_from_label,
     format_summary,
     grid_mode_from_label,
+    grid_ms_enabled,
     validate_form,
 )
 from sky_cotl_studio.pipeline.job import (
@@ -124,9 +125,7 @@ class MainWindow(QMainWindow):
         self.grid_ms_spin.setValue(120.0)
         self.grid_ms_spin.setSuffix(" ms")
         self.grid_ms_spin.setEnabled(False)
-        self.grid_mode_combo.currentTextChanged.connect(
-            lambda text: self.grid_ms_spin.setEnabled(text == "Cố định")
-        )
+        self.grid_mode_combo.currentTextChanged.connect(self._update_grid_ms_enabled)
         grid_row = QHBoxLayout()
         grid_row.addWidget(self.grid_mode_combo)
         grid_row.addWidget(self.grid_ms_spin)
@@ -180,6 +179,10 @@ class MainWindow(QMainWindow):
         self.log_view.setPlaceholderText("Nhật ký xử lý")
         layout.addWidget(self.log_view)
         self.setCentralWidget(central_widget)
+
+    def _update_grid_ms_enabled(self, label: str) -> None:
+        grid_mode = grid_mode_from_label(label)
+        self.grid_ms_spin.setEnabled(grid_ms_enabled(grid_mode))
 
     def _browse_mp3(self) -> None:
         path, _selected_filter = QFileDialog.getOpenFileName(

@@ -3,6 +3,12 @@
 Làm tuần tự từng bước. Mỗi bước có tiêu chí hoàn thành và gợi ý prompt cho agent.
 Thứ tự đi từ dưới lên: các phần kiểm chứng được bằng `fixtures/` làm trước, GUI và AI làm sau.
 
+## Tiến độ và việc còn lại
+
+- [x] Bước 0 đến Bước 6 đã hoàn thành.
+- [ ] Bổ sung fixture từ nhiều MP3 để kiểm chứng và hiệu chỉnh lưới trên dữ liệu đa dạng hơn.
+- [ ] Bước 7 — bổ sung các định dạng xuất VP Sheet và 1KeyN khi có mẫu đầu ra.
+
 ## Dữ kiện từ fixtures
 
 **`fixtures/test_output.mid`** (đầu ra thật của Transkun trên MP3 tutorial piano tổng hợp)
@@ -20,7 +26,7 @@ Thứ tự đi từ dưới lên: các phần kiểm chứng được bằng `fi
 
 ---
 
-## Bước 0 — Khung dự án
+## Bước 0 — Khung dự án ✅ Hoàn tất
 
 Làm: tạo cấu trúc thư mục theo `AGENTS.md`, `pyproject.toml`, `requirements-core.txt`,
 `models.py` (Note, SkyNote), một test rỗng chạy được.
@@ -29,7 +35,7 @@ Xong khi: `pytest -q` và `ruff check .` chạy sạch.
 
 Prompt: *"Đọc AGENTS.md. Thực hiện Bước 0 trong PLAN.md. Chỉ tạo khung dự án, chưa viết logic."*
 
-## Bước 1 — Exporter (Sky Studio JSON)
+## Bước 1 — Exporter (Sky Studio JSON) ✅ Hoàn tất
 
 Làm: `exporters/sky_studio.py` với `export(meta, sky_notes) -> str` và `load(path)` để đọc lại.
 Ghi key dạng `Key{n}` (không layer). Khi đọc, chấp nhận cả `Key{n}` lẫn `{số}Key{n}` và bỏ chữ số đầu.
@@ -43,7 +49,7 @@ Test:
 
 Prompt: *"Thực hiện Bước 1. Viết test trước. Không đụng đến thư mục midi hay converter."*
 
-## Bước 2 — MIDI Processing
+## Bước 2 — MIDI Processing ✅ Hoàn tất
 
 Làm: `midi/reader.py`
 - `read_notes(path) -> list[Note]`: gộp mọi track, ghép note-on/note-off để có `duration_ms`.
@@ -60,7 +66,7 @@ Test với `test_output.mid`:
 
 Prompt: *"Thực hiện Bước 2. Không dùng PySide6 hay torch. Chạy test với fixtures/test_output.mid."*
 
-## Bước 3 — Sky Converter
+## Bước 3 — Sky Converter ✅ Hoàn tất
 
 Chia thành các hàm nhỏ, mỗi hàm một test.
 
@@ -93,7 +99,7 @@ Xong khi: `test_output.mid` chuyển ra JSON hợp lệ qua exporter của Bư�
 
 Prompt: *"Thực hiện Bước 3, từng hàm một, theo thứ tự 1 đến 6. Dừng sau mỗi hàm để chạy test."*
 
-## Bước 4 — So sánh với bản chép tay
+## Bước 4 — So sánh với bản chép tay ✅ Hoàn tất
 
 Làm: `tools/compare.py` (hoặc `tests/test_golden.py`).
 
@@ -109,7 +115,7 @@ nên recall được dự đoán thấp hơn precision.
 
 Prompt: *"Thực hiện Bước 4. Chỉ in báo cáo số liệu, chưa đặt ngưỡng fail."*
 
-## Bước 5 — Audio và AI Engine
+## Bước 5 — Audio và AI Engine ✅ Hoàn tất
 
 Làm:
 - `audio/validate.py`: kiểm tra MP3 (đọc được, độ dài, sample rate), lỗi rõ ràng.
@@ -119,7 +125,7 @@ Làm:
 
 Xong khi: một MP3 ngắn đi qua cả chuỗi ra MIDI, rồi ra JSON, không crash.
 
-## Bước 6 — Pipeline layer và GUI
+## Bước 6 — Pipeline layer và GUI ✅ Hoàn tất
 
 Làm:
 - `pipeline/job.py`: trạng thái tác vụ (`pending → validating → transcribing → converting → exporting → done|failed|cancelled`),
@@ -129,7 +135,14 @@ Làm:
 
 Xong khi: chạy end-to-end từ GUI, GUI không bị đơ khi chạy AI.
 
-## Bước 7 — Định dạng xuất khác
+## Hạn chế đã biết
+
+- Bộ ước lượng lưới nhị phân chưa hỗ trợ nhịp 3 hoặc chùm ba.
+- Ngưỡng chọn lưới hiện dựa trên hai fixture; cần đánh giá lại khi có fixture từ nhiều MP3.
+- Transkun hiện chạy trên Python 3.14 và phát cảnh báo `torch.jit`.
+- `bpm` trong JSON không ảnh hưởng đến phát lại trong ứng dụng đã thử nghiệm.
+
+## Bước 7 — Định dạng xuất khác ⏳ Chưa thực hiện
 
 Làm: `exporters/vp_sheet.py` và `exporters/one_key_n.py` dùng cùng `list[SkyNote]`.
 Cần mẫu đầu ra của từng định dạng trước khi viết. Nếu chưa có thì hỏi lại, đừng đoán.

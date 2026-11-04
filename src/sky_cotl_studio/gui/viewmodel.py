@@ -125,6 +125,11 @@ def grid_mode_from_label(label: str) -> Literal["auto", "fixed"]:
     raise ValueError(f"Chế độ lưới không hợp lệ: {label}")
 
 
+def grid_ms_enabled(grid_mode: Literal["auto", "fixed"]) -> bool:
+    """Return whether the fixed-grid duration control should be enabled."""
+    return grid_mode == "fixed"
+
+
 def device_from_label(label: str) -> Literal["auto", "cuda", "cpu"]:
     """Map the user-visible device label to a typed device choice."""
     choices: dict[str, Literal["auto", "cuda", "cpu"]] = {

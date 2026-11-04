@@ -6,6 +6,7 @@ from sky_cotl_studio.gui.viewmodel import (
     ConversionForm,
     build_job_config,
     format_summary,
+    grid_ms_enabled,
     validate_form,
 )
 from sky_cotl_studio.models import SkyNote
@@ -140,3 +141,8 @@ def test_fixed_grid_ms_must_be_positive() -> None:
     errors = validate_form(_form(grid_mode="fixed", grid_ms="0"))
 
     assert errors
+
+
+def test_grid_ms_enabled_only_for_fixed_mode() -> None:
+    assert grid_ms_enabled("fixed")
+    assert not grid_ms_enabled("auto")

@@ -1,7 +1,8 @@
-"""Compare converted Sky notes with the transcribed fixture."""
+"""Compare converted Sky notes with a reference transcription."""
 
 from __future__ import annotations
 
+import argparse
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -16,11 +17,14 @@ from sky_cotl_studio.models import SkyNote
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _MIDI_FIXTURE = _PROJECT_ROOT / "fixtures" / "test_output.mid"
 _JSON_FIXTURE = _PROJECT_ROOT / "fixtures" / "Summertime.json"
+_MAX_OFFSET_MS = 30_000
+_COARSE_STEP_MS = 10
+_ONSET_TOLERANCE_MS = 60
 
 
 @dataclass(frozen=True)
 class ComparisonReport:
-    """Comparison metrics after applying the best grid-aligned time offset."""
+    """Comparison metrics after applying the best time offset."""
 
     offset_ms: int
     matched_onsets: int
@@ -38,19 +42,16 @@ class ComparisonReport:
 def compare_notes(
     converted: Sequence[SkyNote],
     reference: Sequence[SkyNote],
-    grid_ms: int = 120,
-    search_steps: int = 200,
-    tolerance_ms: int = 60,
+    max_offset_ms: int = _MAX_OFFSET_MS,
+    tolerance_ms: int = _ONSET_TOLERANCE_MS,
 ) -> ComparisonReport:
-    """Find a grid-aligned offset and compare onset and key agreement metrics."""
-    if not isinstance(grid_ms, int) or isinstance(grid_ms, bool) or grid_ms <= 0:
-        raise ValueError("grid_ms must be a positive integer")
+    """Find an unrestricted integer-ms offset and compare onset/key agreement."""
     if (
-        not isinstance(search_steps, int)
-        or isinstance(search_steps, bool)
-        or search_steps < 0
+        not isinstance(max_offset_ms, int)
+        or isinstance(max_offset_ms, bool)
+        or max_offset_ms < 0
     ):
-        raise ValueError("search_steps must be a non-negative integer")
+        raise ValueError("max_offset_ms must be a non-negative integer")
     if (
         not isinstance(tolerance_ms, int)
         or isinstance(tolerance_ms, bool)
@@ -62,24 +63,18 @@ def compare_notes(
     reference_by_time = _notes_by_time(reference)
     converted_times = sorted(converted_by_time)
     reference_times = sorted(reference_by_time)
-
-    best_offset = 0
-    best_pairs: list[tuple[int, int]] = []
-    for step in range(-search_steps, search_steps + 1):
-        offset_ms = step * grid_ms
-        pairs = _match_onsets(
-            converted_times,
-            reference_times,
-            offset_ms,
-            tolerance_ms,
-        )
-        if (len(pairs), -abs(offset_ms), -offset_ms) > (
-            len(best_pairs),
-            -abs(best_offset),
-            -best_offset,
-        ):
-            best_offset = offset_ms
-            best_pairs = pairs
+    best_offset = find_best_offset(
+        converted_times,
+        reference_times,
+        max_offset_ms=max_offset_ms,
+        tolerance_ms=tolerance_ms,
+    )
+    best_pairs = _match_onsets(
+        converted_times,
+        reference_times,
+        best_offset,
+        tolerance_ms,
+    )
 
     matched_onsets = len(best_pairs)
     precision = matched_onsets / len(converted_times) if converted_times else 0.0
@@ -123,22 +118,100 @@ def compare_notes(
     )
 
 
-def run_fixture_comparison() -> ComparisonReport:
-    """Convert the MIDI fixture and compare it to the transcribed JSON fixture."""
-    _, reference_notes = load(_JSON_FIXTURE)
-    result = convert(read_notes(_MIDI_FIXTURE), ConverterConfig())
-    if result.grid_ms is None:
-        raise ValueError("Automatic grid estimation failed for the comparison fixture")
-    return compare_notes(
-        result.sky_notes,
-        reference_notes,
-        grid_ms=int(result.grid_ms),
+def find_best_offset(
+    converted_times: Sequence[int],
+    reference_times: Sequence[int],
+    max_offset_ms: int = _MAX_OFFSET_MS,
+    tolerance_ms: int = _ONSET_TOLERANCE_MS,
+) -> int:
+    """Search ±30 seconds coarsely, then refine the best integer-ms offset."""
+    if max_offset_ms < 0 or tolerance_ms < 0:
+        raise ValueError("offset range and tolerance must be non-negative")
+    coarse_candidates = set(
+        range(-max_offset_ms, max_offset_ms + 1, _COARSE_STEP_MS)
+    )
+    coarse_candidates.update((-max_offset_ms, max_offset_ms))
+    best_coarse = max(
+        coarse_candidates,
+        key=lambda offset: _offset_score(
+            converted_times,
+            reference_times,
+            offset,
+            tolerance_ms,
+        ),
+    )
+    fine_candidates = range(
+        max(-max_offset_ms, best_coarse - _COARSE_STEP_MS),
+        min(max_offset_ms, best_coarse + _COARSE_STEP_MS) + 1,
+    )
+    return max(
+        fine_candidates,
+        key=lambda offset: _offset_score(
+            converted_times,
+            reference_times,
+            offset,
+            tolerance_ms,
+        ),
     )
 
 
-def main() -> None:
-    """Print comparison metrics for the repository fixtures."""
-    report = run_fixture_comparison()
+def compare_files(
+    *,
+    midi_path: Path | None = None,
+    json_converted_path: Path | None = None,
+    reference_path: Path,
+) -> ComparisonReport:
+    """Load a MIDI or converted JSON and compare it with a reference JSON."""
+    if (midi_path is None) == (json_converted_path is None):
+        raise ValueError("Provide exactly one of midi_path or json_converted_path")
+    if midi_path is not None:
+        converted = convert(read_notes(midi_path), ConverterConfig()).sky_notes
+    else:
+        assert json_converted_path is not None
+        _, converted = load(json_converted_path)
+    _, reference = load(reference_path)
+    return compare_notes(converted, reference)
+
+
+def run_fixture_comparison() -> ComparisonReport:
+    """Convert the default MIDI fixture and compare it to Summertime.json."""
+    return compare_files(midi_path=_MIDI_FIXTURE, reference_path=_JSON_FIXTURE)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Print comparison metrics for explicit files or the repository fixtures."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument("--midi", type=Path, help="Raw MIDI to convert and compare")
+    source_group.add_argument(
+        "--json-converted",
+        type=Path,
+        help="Already converted Sky Studio JSON",
+    )
+    parser.add_argument(
+        "--reference",
+        type=Path,
+        help="Reference Sky Studio JSON (required with --midi or --json-converted)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.midi is None and args.json_converted is None and args.reference is None:
+        report = run_fixture_comparison()
+    elif args.reference is None or (
+        args.midi is None and args.json_converted is None
+    ):
+        parser.error("--reference must be used with exactly one comparison input")
+    else:
+        report = compare_files(
+            midi_path=args.midi,
+            json_converted_path=args.json_converted,
+            reference_path=args.reference,
+        )
+
+    _print_report(report)
+
+
+def _print_report(report: ComparisonReport) -> None:
     print(f"Best offset: {report.offset_ms} ms")
     print(
         f"Onset matches: {report.matched_onsets}/{report.predicted_onsets} predicted, "
@@ -162,6 +235,20 @@ def _notes_by_time(notes: Sequence[SkyNote]) -> dict[int, set[int]]:
             raise TypeError("note keys must be integers")
         notes_by_time[note.time_ms].add(note.key)
     return dict(notes_by_time)
+
+
+def _offset_score(
+    converted_times: Sequence[int],
+    reference_times: Sequence[int],
+    offset_ms: int,
+    tolerance_ms: int,
+) -> tuple[int, int, int, int]:
+    pairs = _match_onsets(converted_times, reference_times, offset_ms, tolerance_ms)
+    residual_ms = sum(
+        abs(converted_time + offset_ms - reference_time)
+        for converted_time, reference_time in pairs
+    )
+    return (len(pairs), -residual_ms, -abs(offset_ms), -offset_ms)
 
 
 def _match_onsets(

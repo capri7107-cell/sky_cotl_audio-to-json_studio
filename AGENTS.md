@@ -105,6 +105,9 @@ Quy tắc:
 - Hợp âm thường 1–3 nốt, hiếm khi 4.
 - `bpm`, `bitsPerPage`, `pitchLevel` là tham số có thể cấu hình. Ý nghĩa chính xác chưa được xác nhận,
   đừng tự suy diễn. Dùng giá trị mặc định của file mẫu và để người dùng sửa.
+- Chỉ `fixtures/Summertime.json` là bản chép tay thật trong repo. Theo kết quả thử của người dùng,
+  `bpm` không ảnh hưởng đến phát trong app.
+- Các JSON khác trong `fixtures/local/` là đầu ra của ứng dụng, không dùng làm đáp án tham chiếu.
 
 ### Thang âm Sky (đã xác nhận)
 
