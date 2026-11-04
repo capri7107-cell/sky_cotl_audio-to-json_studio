@@ -111,19 +111,25 @@ def convert(
             for note in merged_notes
         ]
     else:
-        normalized_notes = [
-            replace(
-                note,
-                time_ms=float(
-                    quantize_lattice(
-                        note.time_ms - earliest_onset,
-                        grid_ms,
-                        phase_ms,
-                    )
-                ),
+        normalized_notes = []
+        for note in merged_notes:
+            relative_time = note.time_ms - earliest_onset
+            quantized_time = quantize_lattice(relative_time, grid_ms, phase_ms)
+            grid_index = math.floor((relative_time - phase_ms) / grid_ms + 0.5)
+            nearest_grid_time = phase_ms + grid_index * grid_ms
+            is_outlier = (
+                converter_config.grid_outliers == "keep"
+                and abs(relative_time - nearest_grid_time)
+                > converter_config.outlier_ms
             )
-            for note in merged_notes
-        ]
+            normalized_time = (
+                math.floor(relative_time + 0.5)
+                if is_outlier
+                else quantized_time
+            )
+            normalized_notes.append(
+                replace(note, time_ms=float(normalized_time))
+            )
     transpose = best_transpose([note.pitch for note in normalized_notes])
 
     sky_notes: list[SkyNote] = []

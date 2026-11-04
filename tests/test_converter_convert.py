@@ -185,3 +185,112 @@ def test_auto_grid_handles_jittered_374_4_ms_synthetic_onsets() -> None:
     )
     assert max(output_steps) - min(output_steps) <= 1
     assert all(step == pytest.approx(374.4, abs=1) for step in output_steps)
+
+
+def test_grid_outlier_keep_preserves_70ms_midi_outlier_and_snap_quantizes(
+    tmp_path: Path,
+) -> None:
+    import mido
+
+    midi_path = tmp_path / "grid-outlier.mid"
+    midi_file = mido.MidiFile(ticks_per_beat=100)
+    track = mido.MidiTrack()
+    midi_file.tracks.append(track)
+    track.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+    onset_ticks = [0, 40, 80, 120, 160, 200, 254, 280, 320, 360]
+    events: list[tuple[int, int, mido.Message]] = []
+    for index, onset_tick in enumerate(onset_ticks):
+        pitch = 60 + (index % 7)
+        events.append(
+            (onset_tick, 1, mido.Message("note_on", note=pitch, velocity=90))
+        )
+        events.append(
+            (
+                onset_tick + 8,
+                0,
+                mido.Message("note_off", note=pitch, velocity=0),
+            )
+        )
+    previous_tick = 0
+    for tick, _order, message in sorted(events, key=lambda event: (event[0], event[1])):
+        message.time = tick - previous_tick
+        track.append(message)
+        previous_tick = tick
+    midi_file.save(midi_path)
+
+    notes = read_notes(midi_path)
+    snap = convert(
+        notes,
+        ConverterConfig(
+            grid_mode="fixed",
+            grid_ms=200,
+            merge_ms=0,
+            grid_outliers="snap",
+        ),
+    )
+    keep = convert(
+        notes,
+        ConverterConfig(
+            grid_mode="fixed",
+            grid_ms=200,
+            merge_ms=0,
+            grid_outliers="keep",
+        ),
+    )
+
+    outlier_time_ms = 254 * 5
+    assert outlier_time_ms not in {note.time_ms for note in snap.sky_notes}
+    assert outlier_time_ms in {note.time_ms for note in keep.sky_notes}
+
+
+def test_grid_outlier_modes_are_byte_for_byte_equivalent_without_outliers(
+    tmp_path: Path,
+) -> None:
+    import mido
+
+    midi_path = tmp_path / "on-grid.mid"
+    midi_file = mido.MidiFile(ticks_per_beat=100)
+    track = mido.MidiTrack()
+    midi_file.tracks.append(track)
+    track.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+    events: list[tuple[int, int, mido.Message]] = []
+    for index, onset_tick in enumerate(range(0, 400, 40)):
+        pitch = 60 + (index % 7)
+        events.append(
+            (onset_tick, 1, mido.Message("note_on", note=pitch, velocity=90))
+        )
+        events.append(
+            (
+                onset_tick + 8,
+                0,
+                mido.Message("note_off", note=pitch, velocity=0),
+            )
+        )
+    previous_tick = 0
+    for tick, _order, message in sorted(events, key=lambda event: (event[0], event[1])):
+        message.time = tick - previous_tick
+        track.append(message)
+        previous_tick = tick
+    midi_file.save(midi_path)
+
+    notes = read_notes(midi_path)
+    snap = convert(
+        notes,
+        ConverterConfig(
+            grid_mode="fixed",
+            grid_ms=200,
+            merge_ms=0,
+            grid_outliers="snap",
+        ),
+    )
+    keep = convert(
+        notes,
+        ConverterConfig(
+            grid_mode="fixed",
+            grid_ms=200,
+            merge_ms=0,
+            grid_outliers="keep",
+        ),
+    )
+
+    assert snap == keep

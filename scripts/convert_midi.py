@@ -21,11 +21,22 @@ def main() -> None:
     defaults = ConverterConfig()
     parser.add_argument("--grid-mode", choices=("auto", "fixed"), default="auto")
     parser.add_argument("--grid-ms", type=float, default=defaults.grid_ms)
+    parser.add_argument(
+        "--grid-outliers",
+        choices=("snap", "keep"),
+        default=defaults.grid_outliers,
+    )
+    parser.add_argument("--outlier-ms", type=float, default=defaults.outlier_ms)
     args = parser.parse_args()
 
     midi_path: Path = args.midi_path
     json_path: Path = args.json_path
-    config = ConverterConfig(grid_mode=args.grid_mode, grid_ms=args.grid_ms)
+    config = ConverterConfig(
+        grid_mode=args.grid_mode,
+        grid_ms=args.grid_ms,
+        grid_outliers=args.grid_outliers,
+        outlier_ms=args.outlier_ms,
+    )
     midi_notes = read_notes(midi_path)
     result = convert(midi_notes, config)
     metadata = SongMeta(

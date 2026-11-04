@@ -105,7 +105,11 @@ switch ($Task) {
         Invoke-PythonScript $compareArguments
     }
     "fidelity" {
-        Invoke-PythonScript @("tools/fidelity.py")
+        $fidelityArguments = @("tools/fidelity.py")
+        if ($ExtraArguments) {
+            $fidelityArguments += $ExtraArguments
+        }
+        Invoke-PythonScript $fidelityArguments
     }
     "mp3" {
         if (-not $InputPath -or -not $OutputPath) {

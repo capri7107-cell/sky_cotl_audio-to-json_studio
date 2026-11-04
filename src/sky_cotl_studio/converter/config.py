@@ -13,10 +13,21 @@ class ConverterConfig:
     merge_ms: float = 40
     max_chord: int = 4
     grid_mode: Literal["auto", "fixed"] = "auto"
+    grid_outliers: Literal["snap", "keep"] = "snap"
+    outlier_ms: float = 40
 
     def __post_init__(self) -> None:
         if self.grid_mode not in ("auto", "fixed"):
             raise ValueError("grid_mode must be 'auto' or 'fixed'")
+        if self.grid_outliers not in ("snap", "keep"):
+            raise ValueError("grid_outliers must be 'snap' or 'keep'")
+        if (
+            isinstance(self.outlier_ms, bool)
+            or not isinstance(self.outlier_ms, (int, float))
+            or not math.isfinite(self.outlier_ms)
+            or self.outlier_ms < 0
+        ):
+            raise ValueError("outlier_ms must be a non-negative finite number")
         if (
             isinstance(self.grid_ms, bool)
             or not isinstance(self.grid_ms, (int, float))

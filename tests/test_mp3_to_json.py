@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.mp3_to_json import build_parser, run_mp3_to_json
+from sky_cotl_studio.converter.config import ConverterConfig
 from sky_cotl_studio.converter.convert import ConversionResult, ConversionStats
 from sky_cotl_studio.models import SkyNote
 from sky_cotl_studio.pipeline.job import ConversionJobError
@@ -39,12 +40,25 @@ def test_mp3_cli_defaults_to_automatic_grid_and_accepts_fixed_mode() -> None:
 
     defaults = parser.parse_args(["input.mp3", "output.json"])
     fixed = parser.parse_args(
-        ["input.mp3", "output.json", "--grid-mode", "fixed", "--grid-ms", "187"]
+        [
+            "input.mp3",
+            "output.json",
+            "--grid-mode",
+            "fixed",
+            "--grid-ms",
+            "187",
+            "--grid-outliers",
+            "keep",
+            "--outlier-ms",
+            "55",
+        ]
     )
 
     assert defaults.grid_mode == "auto"
     assert fixed.grid_mode == "fixed"
     assert fixed.grid_ms == 187
+    assert fixed.grid_outliers == "keep"
+    assert fixed.outlier_ms == 55
 
 
 @pytest.mark.parametrize(
@@ -67,6 +81,8 @@ def test_conversion_scripts_run_directly_without_pythonpath(script_name: str) ->
 
     assert completed.returncode == 0, completed.stderr
     assert "usage:" in completed.stdout
+    assert "--grid-outliers" in completed.stdout
+    assert "--outlier-ms" in completed.stdout
 
 
 def _mock_pipeline(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -214,3 +230,28 @@ def test_run_mp3_to_json_rejects_midi_out_same_as_input(
 
     with pytest.raises(ValueError, match="differ"):
         run_mp3_to_json(input_mp3, tmp_path / "out.json", midi_out=input_mp3)
+
+
+def test_mp3_cli_passes_grid_outlier_options_to_pipeline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_mp3 = tmp_path / "song.mp3"
+    input_mp3.write_bytes(b"audio")
+    seen_config: list[ConverterConfig] = []
+    _mock_pipeline(monkeypatch)
+
+    def capture_config(_notes: list[object], config: ConverterConfig) -> ConversionResult:
+        seen_config.append(config)
+        return _conversion_result()
+
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.convert", capture_config)
+    run_mp3_to_json(
+        input_mp3,
+        tmp_path / "song.json",
+        config=ConverterConfig(grid_outliers="keep", outlier_ms=55),
+    )
+
+    assert len(seen_config) == 1
+    assert seen_config[0].grid_outliers == "keep"
+    assert seen_config[0].outlier_ms == 55

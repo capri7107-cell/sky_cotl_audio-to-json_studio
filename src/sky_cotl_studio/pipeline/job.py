@@ -55,6 +55,8 @@ class ConversionJobConfig:
     midi_out: Path | None = None
     merge_ms: float = 40
     max_chord: int = 4
+    grid_outliers: Literal["snap", "keep"] = "snap"
+    outlier_ms: float = 40
 
     def __post_init__(self) -> None:
         ConverterConfig(
@@ -62,6 +64,8 @@ class ConversionJobConfig:
             grid_ms=self.grid_ms,
             merge_ms=self.merge_ms,
             max_chord=self.max_chord,
+            grid_outliers=self.grid_outliers,
+            outlier_ms=self.outlier_ms,
         )
         if self.device not in (None, "cpu", "cuda"):
             raise ValueError("device must be 'cpu', 'cuda', or None")
@@ -269,6 +273,8 @@ class ConversionJob:
                 grid_ms=self.config.grid_ms,
                 merge_ms=self.config.merge_ms,
                 max_chord=self.config.max_chord,
+                grid_outliers=self.config.grid_outliers,
+                outlier_ms=self.config.outlier_ms,
             )
             conversion, phase_seconds["convert"] = _measure(
                 lambda: convert(trimmed_notes, converter_config)

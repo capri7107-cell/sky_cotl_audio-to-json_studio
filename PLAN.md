@@ -7,7 +7,7 @@ Thứ tự đi từ dưới lên: các phần kiểm chứng được bằng `fi
 
 - [x] Bước 0 đến Bước 6 đã hoàn thành.
 - [ ] Bổ sung fixture từ nhiều MP3 để kiểm chứng và hiệu chỉnh lưới trên dữ liệu đa dạng hơn.
-- [ ] Bước 7 — bổ sung các định dạng xuất VP Sheet và 1KeyN khi có mẫu đầu ra.
+- [x] Bước 7 — Đã bỏ khỏi phạm vi: không làm VP Sheet và 1KeyN; dự án dừng ở Sky Studio JSON một bè.
 
 ## Dữ kiện từ fixtures
 
@@ -142,10 +142,9 @@ Xong khi: chạy end-to-end từ GUI, GUI không bị đơ khi chạy AI.
 - Transkun hiện chạy trên Python 3.14 và phát cảnh báo `torch.jit`.
 - `bpm` trong JSON không ảnh hưởng đến phát lại trong ứng dụng đã thử nghiệm.
 
-## Bước 7 — Định dạng xuất khác ⏳ Chưa thực hiện
+## Bước 7 — Đã bỏ khỏi phạm vi
 
-Làm: `exporters/vp_sheet.py` và `exporters/one_key_n.py` dùng cùng `list[SkyNote]`.
-Cần mẫu đầu ra của từng định dạng trước khi viết. Nếu chưa có thì hỏi lại, đừng đoán.
+Không làm VP Sheet và 1KeyN; dự án dừng ở Sky Studio JSON một bè.
 
 ---
 

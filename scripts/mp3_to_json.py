@@ -56,6 +56,8 @@ def run_mp3_to_json(
             grid_ms=converter_config.grid_ms,
             merge_ms=converter_config.merge_ms,
             max_chord=converter_config.max_chord,
+            grid_outliers=converter_config.grid_outliers,
+            outlier_ms=converter_config.outlier_ms,
             device=device,
             keep_midi=keep_midi,
             midi_out=Path(midi_out) if midi_out is not None else None,
@@ -91,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     defaults = ConverterConfig()
     parser.add_argument("--grid-mode", choices=("auto", "fixed"), default="auto")
     parser.add_argument("--grid-ms", type=float, default=defaults.grid_ms)
+    parser.add_argument(
+        "--grid-outliers",
+        choices=("snap", "keep"),
+        default=defaults.grid_outliers,
+    )
+    parser.add_argument("--outlier-ms", type=float, default=defaults.outlier_ms)
     parser.add_argument("--device", choices=("cpu", "cuda"))
     parser.add_argument(
         "--keep-midi",
@@ -116,7 +124,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             keep_midi=args.keep_midi,
             midi_out=args.midi_out,
             progress_callback=lambda message: print(f"[Transkun] {message}"),
-            config=ConverterConfig(grid_mode=args.grid_mode, grid_ms=args.grid_ms),
+            config=ConverterConfig(
+                grid_mode=args.grid_mode,
+                grid_ms=args.grid_ms,
+                grid_outliers=args.grid_outliers,
+                outlier_ms=args.outlier_ms,
+            ),
         )
     except KeyboardInterrupt:
         print("Conversion cancelled; temporary MIDI was removed.")

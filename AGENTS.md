@@ -15,10 +15,12 @@ Luồng xử lý (7 tầng, phụ thuộc một chiều từ trên xuống):
 4. `ai` — Transkun (PyTorch, CUDA): MP3 → MIDI
 5. `midi` — đọc MIDI, trích xuất nốt, hiệu chỉnh dữ liệu
 6. `converter` — cao độ → Key 0–14, lượng tử hóa nhịp, hợp âm, timing
-7. `exporters` — VP Sheet, Sky Studio JSON, 1KeyN
+7. `exporters` — Sky Studio JSON một bè
 
 Quy tắc phụ thuộc: tầng dưới **không** import tầng trên. `midi`, `converter`, `exporters`
 phải chạy được không cần GUI, không cần GPU, không cần PyTorch.
+
+Phạm vi xuất của dự án dừng ở Sky Studio JSON một bè; không làm VP Sheet hay 1KeyN.
 
 ## 2. Stack
 
