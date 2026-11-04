@@ -19,10 +19,78 @@ from sky_cotl_studio.audio.download import (
 
 
 @pytest.mark.parametrize(
-    "url",
-    ["", "ftp://youtube.com/watch?v=x", "-o", "javascript:alert(1)", "https://evil.test/x"],
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/watch?v=LSwXh1Y5thY", "https://www.youtube.com/watch?v=LSwXh1Y5thY"),
+        ("www.youtube.com/watch?v=LSwXh1Y5thY", "https://www.youtube.com/watch?v=LSwXh1Y5thY"),
+        (" https://www.youtube.com/watch?v=LSwXh1Y5thY ", "https://www.youtube.com/watch?v=LSwXh1Y5thY"),
+        ('"https://www.youtube.com/watch?v=LSwXh1Y5thY"', "https://www.youtube.com/watch?v=LSwXh1Y5thY"),
+        ("https://youtube.com/watch?v=abc123", "https://youtube.com/watch?v=abc123"),
+        ("https://youtu.be/abc123", "https://youtu.be/abc123"),
+        ("https://www.youtube.com/shorts/abc123", "https://www.youtube.com/shorts/abc123"),
+        ("https://music.youtube.com/watch?v=abc123", "https://music.youtube.com/watch?v=abc123"),
+        ("https://m.youtube.com/watch?v=abc123", "https://m.youtube.com/watch?v=abc123"),
+        ("https://youtube-nocookie.com/embed/abc123", "https://youtube-nocookie.com/embed/abc123"),
+        ("https://www.youtube-nocookie.com/embed/abc123", "https://www.youtube-nocookie.com/embed/abc123"),
+        ("https://www.youtube.com/watch?v=abc123&list=PLx", "https://www.youtube.com/watch?v=abc123&list=PLx"),
+        ("https://youtu.be/abc123?t=42", "https://youtu.be/abc123?t=42"),
+        ("https://youtube.com/watch?feature=share&v=abc123", "https://youtube.com/watch?feature=share&v=abc123"),
+        ("https://YOUTUBE.COM/watch?v=abc123", "https://youtube.com/watch?v=abc123"),
+        ("https://music.youtube.com/watch?v=abc123&si=tracking", "https://music.youtube.com/watch?v=abc123&si=tracking"),
+        ("https://youtube.com.evil.com/watch?v=abc123", None),
+        ("https://evilyoutube.com/watch?v=abc123", None),
+        ("https://youtube.com@evil.com/watch?v=abc123", None),
+        ("https://user:pass@youtube.com/watch?v=abc123", None),
+        ("http://localhost/watch?v=abc123", None),
+        ("ftp://youtube.com/watch?v=abc123", None),
+        ("file://youtube.com/watch?v=abc123", None),
+        ("javascript:alert(1)", None),
+        ("-o", None),
+        ("https://www.youtube.com/watch", None),
+        ("https://youtu.be/", None),
+        ("https://www.youtube.com/not-a-video", None),
+        ("https://youtube.com/not-a-video?v=abc123", None),
+    ],
 )
-def test_invalid_youtube_urls_are_rejected_before_subprocess(
+def test_youtube_url_allowlist_and_normalization(
+    url: str,
+    expected: str | None,
+) -> None:
+    if expected is None:
+        with pytest.raises(DownloadError):
+            validate_youtube_url(url)
+    else:
+        assert validate_youtube_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("https://example.com/watch?v=x", "Only YouTube links are supported"),
+        ("https://www.youtube.com/watch", "This link has no video ID"),
+        ("https://youtu.be/", "This link has no video ID"),
+        ("https://www.youtube.com/not-a-video", "This link is not formatted correctly"),
+    ],
+)
+def test_youtube_url_errors_explain_the_reason(url: str, message: str) -> None:
+    with pytest.raises(DownloadError, match=message):
+        validate_youtube_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evilyoutube.com/watch?v=abc123",
+        "https://youtube.com.evil.com/watch?v=abc123",
+        "https://youtube.com@evil.com/watch?v=abc123",
+        "http://localhost/watch?v=abc123",
+        "ftp://youtube.com/watch?v=abc123",
+        "file://youtube.com/watch?v=abc123",
+        "javascript:alert(1)",
+        "-o",
+    ],
+)
+def test_invalid_urls_are_rejected_before_launching_ytdlp(
     url: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -45,7 +113,7 @@ def test_invalid_youtube_urls_are_rejected_before_subprocess(
 
 class _FakeProcess:
     def __init__(self, command: list[str], output_dir: Path) -> None:
-        self.stdout = StringIO("Vết Mưa\n")
+        self.stdout = StringIO("SKYCOTL_TITLE=Vết Mưa\n")
         self.stderr = StringIO("[download]  42.5% of 4.00MiB at 2.00MiB/s\n")
         self.returncode = 0
         self.pid = 2345
@@ -91,6 +159,8 @@ def test_download_builds_utf8_command_and_reports_progress_and_title(
         command[command.index("--newline")],
     ]
     assert command[command.index("--match-filter") + 1] == "!is_live & duration <= 900"
+    assert "--no-simulate" in command
+    assert "--progress" in command
     assert command[command.index("-o") + 1].endswith("source.%(ext)s")
     assert command[-2:] == ["--", "https://youtu.be/example"]
     assert kwargs["encoding"] == "utf-8"
@@ -101,8 +171,113 @@ def test_download_builds_utf8_command_and_reports_progress_and_title(
     assert environment["PYTHONIOENCODING"] == "utf-8"
     assert result.title == "Vết Mưa"
     assert result.audio_path == tmp_path / "source.wav"
+    assert result.stderr == "[download]  42.5% of 4.00MiB at 2.00MiB/s"
     assert any(event.percentage == 42.5 for event in progress)
+    assert any(event.stream == "command" and "--no-simulate" in event.message for event in progress)
+    assert any(event.stream == "stderr" and event.percentage == 42.5 for event in progress)
     assert os.name != "nt" or kwargs["creationflags"] == subprocess.CREATE_NO_WINDOW
+
+
+def test_print_option_does_not_simulate_instead_of_downloading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_command: list[str] = []
+
+    class PrintImpliesSimulationProcess(_FakeProcess):
+        def __init__(self, command: list[str], output_dir: Path) -> None:
+            captured_command.extend(command)
+            self.command = command
+            self.pid = 2345
+            self.returncode = 0
+            self.stdout = StringIO("Vết Mưa\n")
+            self.stderr = StringIO("")
+            if "--print" not in command or "--no-simulate" in command:
+                (output_dir / "source.wav").write_bytes(b"wav")
+
+    monkeypatch.setattr(
+        "sky_cotl_studio.audio.download.subprocess.Popen",
+        lambda command, **_kwargs: PrintImpliesSimulationProcess(command, tmp_path),
+    )
+
+    result = download_youtube("https://youtube.com/watch?v=x", tmp_path)
+
+    assert "--print" in captured_command
+    assert "--no-simulate" in captured_command
+    assert result.audio_path.is_file()
+
+
+def test_title_is_read_only_from_prefixed_line_and_progress_never_becomes_title(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RealisticOutputProcess(_FakeProcess):
+        def __init__(self, command: list[str], output_dir: Path) -> None:
+            super().__init__(command, output_dir)
+            self.stdout = StringIO(
+                "SKYCOTL_TITLE=Vết Mưa = Piano Cover\n"
+                "[download] 100% of 4.37MiB in 00:00:01 at 3.10MiB/s\n"
+                "100% of 4.37MiB in 00:00:01 at 3.10MiB/s\n"
+            )
+            self.stderr = StringIO("")
+
+    monkeypatch.setattr(
+        "sky_cotl_studio.audio.download.subprocess.Popen",
+        lambda command, **_kwargs: RealisticOutputProcess(command, tmp_path),
+    )
+    progress: list[DownloadProgress] = []
+
+    result = download_youtube(
+        "https://youtube.com/watch?v=x",
+        tmp_path,
+        progress_callback=progress.append,
+    )
+
+    assert result.title == "Vết Mưa = Piano Cover"
+    assert all(
+        event.title is None or event.title == "Vết Mưa = Piano Cover"
+        for event in progress
+    )
+    assert "--print" in result.argv
+    assert "SKYCOTL_TITLE=%(title)s" in result.argv
+
+
+def test_title_sanitization_preserves_unicode_equals_and_caps_length() -> None:
+    from sky_cotl_studio.audio.download import sanitize_video_title
+
+    assert sanitize_video_title("Vết Mưa = Piano") == "Vết Mưa = Piano"
+    assert sanitize_video_title("  ") == ""
+    assert sanitize_video_title("a\x00b\nc") == "abc"
+    assert sanitize_video_title("x" * 140) == "x" * 120
+
+
+def test_empty_prefixed_title_stays_empty_even_when_progress_is_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyTitleProcess(_FakeProcess):
+        def __init__(self, command: list[str], output_dir: Path) -> None:
+            super().__init__(command, output_dir)
+            self.stdout = StringIO(
+                "SKYCOTL_TITLE=\n"
+                "[download] 100% of 4.37MiB in 00:00:01 at 3.10MiB/s\n"
+            )
+            self.stderr = StringIO("")
+
+    monkeypatch.setattr(
+        "sky_cotl_studio.audio.download.subprocess.Popen",
+        lambda command, **_kwargs: EmptyTitleProcess(command, tmp_path),
+    )
+    progress: list[DownloadProgress] = []
+
+    result = download_youtube(
+        "https://youtube.com/watch?v=x",
+        tmp_path,
+        progress_callback=progress.append,
+    )
+
+    assert result.title == ""
+    assert all(event.title is None for event in progress)
 
 
 def test_download_uses_python_exe_when_running_under_pythonw(
@@ -275,9 +450,9 @@ def test_progress_parser_rejects_non_progress_lines() -> None:
     assert parse_download_percentage("[download] 100.0% of 10MiB") == 100
     assert parse_download_percentage("No supported JavaScript runtime") is None
     assert validate_youtube_url(
-        "https://media.example/video",
+        "https://media.example/watch?v=abc123",
         allowed_domains=("media.example",),
-    ) == "https://media.example/video"
+    ) == "https://media.example/watch?v=abc123"
 
 
 @pytest.mark.network

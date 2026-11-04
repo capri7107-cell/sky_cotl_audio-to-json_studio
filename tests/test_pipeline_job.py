@@ -12,6 +12,7 @@ from sky_cotl_studio.audio.download import (
     DownloadProgress,
     DownloadResult,
 )
+from sky_cotl_studio.audio.validate import AudioProbeError
 from sky_cotl_studio.converter.convert import ConversionResult, ConversionStats
 from sky_cotl_studio.models import Note, SkyNote, SongMeta
 from sky_cotl_studio.pipeline.job import (
@@ -54,7 +55,12 @@ def _conversion() -> ConversionResult:
     )
 
 
-def _config(tmp_path: Path, *, keep_midi: bool = False) -> ConversionJobConfig:
+def _config(
+    tmp_path: Path,
+    *,
+    keep_midi: bool = False,
+    avoid_overwrite: bool = False,
+) -> ConversionJobConfig:
     tmp_path.mkdir(parents=True, exist_ok=True)
     input_mp3 = tmp_path / "input.mp3"
     input_mp3.write_bytes(b"audio")
@@ -64,6 +70,7 @@ def _config(tmp_path: Path, *, keep_midi: bool = False) -> ConversionJobConfig:
         metadata=_meta(),
         device="cpu",
         keep_midi=keep_midi,
+        avoid_overwrite=avoid_overwrite,
     )
 
 
@@ -102,9 +109,14 @@ def _patch_services(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         assert notes[0].time_ms == 100
         return _conversion()
 
-    def export(_meta: SongMeta, sky_notes: list[SkyNote]) -> str:
+    def export(meta: SongMeta, sky_notes: list[SkyNote]) -> str:
         calls.append("export")
-        return json.dumps([{"songNotes": [{"time": note.time_ms} for note in sky_notes]}])
+        return json.dumps(
+            {
+                "name": meta.name,
+                "songNotes": [{"time": note.time_ms} for note in sky_notes],
+            }
+        )
 
     monkeypatch.setattr("sky_cotl_studio.pipeline.job.validate_mp3", validate)
     monkeypatch.setattr("sky_cotl_studio.pipeline.job.transcribe", transcribe)
@@ -263,7 +275,7 @@ def test_youtube_job_reports_download_progress_title_and_cleans_temp_directory(
         input_path=None,
         input_url="https://youtu.be/example",
         output_path=tmp_path / "video.json",
-        output_path_from_title=True,
+        avoid_overwrite=True,
         metadata=_meta().__class__(
             name="",
             author="",
@@ -346,6 +358,87 @@ def test_youtube_job_cleans_temporary_directory_on_error_or_cancel(
 
 
 @pytest.mark.parametrize(
+    ("failure_category", "expected_message"),
+    [
+        ("process_exit", "yt-dlp exited with a non-zero status."),
+        ("missing_output", "yt-dlp finished successfully but created no audio file."),
+    ],
+)
+def test_youtube_download_failure_categories_are_kept_separate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_category: str,
+    expected_message: str,
+) -> None:
+    config = ConversionJobConfig(
+        input_path=None,
+        input_url="https://youtu.be/example",
+        output_path=tmp_path / "video.json",
+        metadata=_meta(),
+        device="cpu",
+    )
+    error = DownloadError(
+        "download failed",
+        category=failure_category,
+        argv=("python.exe", "-m", "yt_dlp"),
+        stderr="Lỗi yt-dlp cuối",
+    )
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.download_youtube",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+    job = ConversionJob(config)
+
+    job.start()
+    assert job.wait(timeout=5)
+
+    assert job.failure is not None
+    assert job.failure.user_message == expected_message
+    assert job.failure.details == "Lỗi yt-dlp cuối"
+    assert "yt-dlp argv" in job.failure.technical_cause
+    assert "Lỗi yt-dlp cuối" in job.failure.technical_cause
+
+
+def test_youtube_downloaded_but_unreadable_audio_has_distinct_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_services(monkeypatch)
+    config = ConversionJobConfig(
+        input_path=None,
+        input_url="https://youtu.be/example",
+        output_path=tmp_path / "video.json",
+        metadata=_meta(),
+        device="cpu",
+    )
+
+    def download(_url: str, temporary_directory: Path, **_kwargs: object) -> DownloadResult:
+        audio_path = temporary_directory / "source.wav"
+        audio_path.write_bytes(b"not wav")
+        return DownloadResult(
+            audio_path=audio_path,
+            title="Vết Mưa",
+            argv=("python.exe", "-m", "yt_dlp"),
+            stderr="Cảnh báo: lỗi đọc WAV",
+        )
+
+    monkeypatch.setattr("sky_cotl_studio.pipeline.job.download_youtube", download)
+    monkeypatch.setattr(
+        "sky_cotl_studio.pipeline.job.validate_audio",
+        lambda _path: (_ for _ in ()).throw(AudioProbeError("invalid WAV")),
+    )
+    job = ConversionJob(config)
+
+    job.start()
+    assert job.wait(timeout=5)
+
+    assert job.failure is not None
+    assert job.failure.user_message == "The downloaded audio file could not be read."
+    assert job.failure.details == "Cảnh báo: lỗi đọc WAV"
+    assert "invalid WAV" in job.failure.technical_cause
+
+
+@pytest.mark.parametrize(
     ("failure_stage", "expected_user_message"),
     [
         ("validate", "The input audio could not be validated."),
@@ -415,6 +508,63 @@ def test_only_one_job_can_run_at_a_time(
         second.start()
     release_validation.set()
     assert first.wait(timeout=5)
+
+
+def test_gui_jobs_never_overwrite_existing_json_or_midi_and_keep_names_in_sync(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_services(monkeypatch)
+    config = _config(tmp_path, keep_midi=True, avoid_overwrite=True)
+    first = ConversionJob(config)
+    first.start()
+    assert first.wait(timeout=5)
+    assert first.result is not None
+    assert first.result.json_path.name == "song.json"
+    assert first.result.midi_path == tmp_path / "song.mid"
+    first_payload = json.loads(first.result.json_path.read_text(encoding="utf-8"))
+    assert first_payload["name"] == "song"
+
+    second = ConversionJob(config)
+    second.start()
+    assert second.wait(timeout=5)
+    assert second.result is not None
+    assert second.result.json_path.name == "song (2).json"
+    assert second.result.midi_path == tmp_path / "song (2).mid"
+    second_payload = json.loads(second.result.json_path.read_text(encoding="utf-8"))
+    assert second_payload["name"] == "song (2)"
+    assert first.result.json_path.read_text(encoding="utf-8") != (
+        second.result.json_path.read_text(encoding="utf-8")
+    )
+
+
+def test_cancel_before_output_publication_leaves_no_partial_json_or_midi(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_services(monkeypatch)
+    job = ConversionJob(_config(tmp_path, keep_midi=True, avoid_overwrite=True))
+    original_write_text = Path.write_text
+
+    def cancel_after_staging(
+        path: Path,
+        data: str,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        written = original_write_text(path, data, *args, **kwargs)
+        if path.suffix == ".json" and path.name.startswith("."):
+            job.cancel()
+        return written
+
+    monkeypatch.setattr(Path, "write_text", cancel_after_staging)
+    job.start()
+    assert job.wait(timeout=5)
+
+    assert job.state is JobState.CANCELLED
+    assert not list(tmp_path.glob("*.json"))
+    assert not list(tmp_path.glob("*.mid"))
+    assert not list(tmp_path.glob(".*.json"))
 
 
 def test_job_callback_messages_follow_pipeline_order(

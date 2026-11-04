@@ -24,8 +24,8 @@ from sky_cotl_studio.audio.download import (
     DownloadCancelledError,
     DownloadError,
     DownloadProgress,
+    DownloadResult,
     download_youtube,
-    safe_video_filename,
 )
 from sky_cotl_studio.audio.validate import (
     AudioValidationError,
@@ -38,6 +38,11 @@ from sky_cotl_studio.exporters.sky_studio import export
 from sky_cotl_studio.midi.cleanup import trim_leading_silence
 from sky_cotl_studio.midi.reader import read_notes
 from sky_cotl_studio.models import SongMeta
+from sky_cotl_studio.pipeline.output import (
+    available_output_paths,
+    publish_output_files,
+    sanitize_output_stem,
+)
 
 
 class JobState(Enum):
@@ -62,7 +67,7 @@ class ConversionJobConfig:
     output_path: Path
     metadata: SongMeta
     input_url: str | None = None
-    output_path_from_title: bool = False
+    avoid_overwrite: bool = False
     grid_mode: Literal["auto", "fixed"] = "auto"
     grid_ms: float = 120
     device: Device | None = None
@@ -95,8 +100,6 @@ class ConversionJobConfig:
             raise ValueError("MIDI output path must differ from the input audio path")
         if self.input_path is not None and _same_path(self.input_path, self.output_path):
             raise ValueError("JSON output path must differ from the input audio path")
-        if self.input_url is None and self.output_path_from_title:
-            raise ValueError("Automatic title output naming requires a YouTube URL")
         if self.max_download_duration_seconds <= 0:
             raise ValueError("max_download_duration_seconds must be positive")
         retained_midi_path = self.retained_midi_path
@@ -147,6 +150,7 @@ class JobFailure:
 
     user_message: str
     technical_cause: str
+    details: str = ""
 
 
 class ConversionJobError(Exception):
@@ -252,6 +256,7 @@ class ConversionJob:
         try:
             phase_seconds: dict[str, float] = {}
             audio_path = self.config.input_path
+            download_result: DownloadResult | None = None
             metadata = self.config.metadata
             output_path = self.config.output_path
             if self.config.input_url is not None:
@@ -260,7 +265,7 @@ class ConversionJob:
                 temporary_directory = tempfile.TemporaryDirectory(
                     prefix="sky-cotl-download-"
                 )
-                download_result, phase_seconds["download"] = _measure(
+                downloaded, phase_seconds["download"] = _measure(
                     lambda: download_youtube(
                         self.config.input_url or "",
                         Path(temporary_directory.name),
@@ -270,16 +275,30 @@ class ConversionJob:
                         cancel_event=self._cancel_event,
                     )
                 )
-                audio_path = download_result.audio_path
-                title = download_result.title.strip()
-                if title:
-                    if not metadata.name.strip():
-                        metadata = replace(metadata, name=title)
-                    if self.config.output_path_from_title:
-                        output_path = output_path.with_name(
-                            f"{safe_video_filename(title)}.json"
-                        )
+                download_result = downloaded
+                audio_path = downloaded.audio_path
+                title = downloaded.title.strip()
+                if title and not metadata.name.strip():
+                    metadata = replace(metadata, name=sanitize_output_stem(title))
                 _check_cancel(self._cancel_event)
+
+            if self.config.avoid_overwrite:
+                preferred_name = metadata.name.strip()
+                if not preferred_name:
+                    preferred_name = (
+                        self.config.input_path.stem
+                        if self.config.input_path is not None
+                        else "untitled"
+                    )
+                metadata = replace(
+                    metadata,
+                    name=sanitize_output_stem(preferred_name),
+                )
+                output_path, _candidate_midi, _stem = available_output_paths(
+                    output_path.parent,
+                    metadata.name,
+                    keep_midi=self.config.keep_midi or self.config.midi_out is not None,
+                )
 
             self._set_state(JobState.VALIDATING, "Validating audio", 0)
             _check_cancel(self._cancel_event)
@@ -287,7 +306,11 @@ class ConversionJob:
                 raise RuntimeError("The job has no audio input")
             validate = validate_mp3 if audio_path.suffix.lower() == ".mp3" else validate_audio
             audio_info, phase_seconds["validate"] = _measure(
-                lambda: validate(audio_path)
+                lambda: _validate_audio_input(
+                    validate,
+                    audio_path,
+                    download_result,
+                )
             )
 
             self._operation = "transcribe"
@@ -343,30 +366,74 @@ class ConversionJob:
 
             self._operation = "export"
             self._set_state(JobState.EXPORTING, "Exporting JSON", 80)
-            json_content, phase_seconds["export"] = _measure(
-                lambda: export(metadata, conversion.sky_notes)
-            )
             _check_cancel(self._cancel_event)
-            staged_json = _temporary_path(
-                output_path.parent,
-                output_path.stem,
-                ".json",
-            )
-            staged_json.write_text(json_content, encoding="utf-8")
-
-            retained_midi_path = (
-                self.config.midi_out
-                if self.config.midi_out is not None
-                else output_path.with_suffix(".mid")
-                if self.config.keep_midi
-                else None
-            )
-            if retained_midi_path is not None:
-                retained_midi_path.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(transcription_path, retained_midi_path)
-                staged_midi = None
-            os.replace(staged_json, output_path)
-            staged_json = None
+            retained_midi_path: Path | None
+            if self.config.avoid_overwrite:
+                preferred_name = metadata.name
+                export_started = time.perf_counter()
+                while True:
+                    output_path, candidate_midi, stem = available_output_paths(
+                        output_path.parent,
+                        preferred_name,
+                        keep_midi=self.config.keep_midi
+                        or self.config.midi_out is not None,
+                    )
+                    candidate_metadata = replace(metadata, name=stem)
+                    json_content = export(candidate_metadata, conversion.sky_notes)
+                    staged_json = _temporary_path(
+                        output_path.parent,
+                        output_path.stem,
+                        ".json",
+                    )
+                    staged_json.write_text(json_content, encoding="utf-8")
+                    _check_cancel(self._cancel_event)
+                    try:
+                        output_path, published_midi, published_stem = publish_output_files(
+                            staged_json,
+                            output_path.parent,
+                            stem,
+                            staged_midi=(
+                                transcription_path
+                                if candidate_midi is not None
+                                else None
+                            ),
+                        )
+                    except FileExistsError:
+                        staged_json.unlink(missing_ok=True)
+                        staged_json = None
+                        continue
+                    staged_json = None
+                    if candidate_midi is not None:
+                        staged_midi = None
+                        retained_midi_path = published_midi
+                    else:
+                        retained_midi_path = None
+                    metadata = replace(candidate_metadata, name=published_stem)
+                    break
+                phase_seconds["export"] = time.perf_counter() - export_started
+            else:
+                json_content, phase_seconds["export"] = _measure(
+                    lambda: export(metadata, conversion.sky_notes)
+                )
+                staged_json = _temporary_path(
+                    output_path.parent,
+                    output_path.stem,
+                    ".json",
+                )
+                staged_json.write_text(json_content, encoding="utf-8")
+                retained_midi_path = (
+                    self.config.midi_out
+                    if self.config.midi_out is not None
+                    else output_path.with_suffix(".mid")
+                    if self.config.keep_midi
+                    else None
+                )
+                if retained_midi_path is not None:
+                    retained_midi_path.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(transcription_path, retained_midi_path)
+                    staged_midi = None
+                os.replace(staged_json, output_path)
+                staged_json = None
 
             result = ConversionJobResult(
                 json_path=output_path,
@@ -416,10 +483,13 @@ class ConversionJob:
         self._notify(JobProgress(JobState.TRANSCRIBING, message, None))
 
     def _download_progress(self, progress: DownloadProgress) -> None:
+        message = progress.message or "Downloading YouTube audio"
+        if progress.stream:
+            message = f"[yt-dlp {progress.stream}] {message}"
         self._notify(
             JobProgress(
                 JobState.DOWNLOADING,
-                progress.message or "Downloading YouTube audio",
+                message,
                 progress.percentage,
                 progress.title,
             )
@@ -468,7 +538,12 @@ class ConversionJob:
             if previous_failure is None:
                 failure = JobFailure(
                     user_message=_user_message(self._operation, error),
-                    technical_cause=f"{type(error).__name__}: {error}",
+                    technical_cause=_technical_cause(error),
+                    details=(
+                        error.stderr[-4000:]
+                        if isinstance(error, DownloadError)
+                        else ""
+                    ),
                 )
             else:
                 failure = JobFailure(
@@ -515,6 +590,37 @@ def _same_path(first: str | Path, second: str | Path) -> bool:
     return Path(first).resolve() == Path(second).resolve()
 
 
+def _validate_audio_input(
+    validate: Callable[[Path], T],
+    audio_path: Path,
+    download_result: DownloadResult | None,
+) -> T:
+    try:
+        return validate(audio_path)
+    except AudioValidationError as error:
+        if download_result is None:
+            raise
+        raise DownloadError(
+            f"Downloaded audio could not be read: {error}",
+            category="unreadable_output",
+            output=str(error),
+            argv=download_result.argv,
+            stderr=download_result.stderr,
+        ) from error
+
+
+def _technical_cause(error: BaseException) -> str:
+    details = f"{type(error).__name__}: {error}"
+    if isinstance(error, DownloadError):
+        if error.argv:
+            details += f"\nyt-dlp argv: {error.argv!r}"
+        if error.stderr:
+            details += f"\nyt-dlp stderr:\n{error.stderr}"
+        elif error.output:
+            details += f"\nyt-dlp output:\n{error.output}"
+    return details
+
+
 def _user_message(stage: str, error: BaseException) -> str:
     if isinstance(error, DownloadError):
         category_messages = {
@@ -526,6 +632,9 @@ def _user_message(stage: str, error: BaseException) -> str:
             "livestream": "Live streams are not supported.",
             "outdated": "Please update yt-dlp.",
             "javascript_runtime": "No supported JavaScript runtime or video format was found.",
+            "process_exit": "yt-dlp exited with a non-zero status.",
+            "missing_output": "yt-dlp finished successfully but created no audio file.",
+            "unreadable_output": "The downloaded audio file could not be read.",
         }
         return category_messages.get(
             error.category,

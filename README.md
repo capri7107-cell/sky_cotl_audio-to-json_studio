@@ -26,6 +26,12 @@ Chạy `Chạy ứng dụng.vbs` ở thư mục gốc để mở ứng dụng kh
 Nhật ký lần chạy gần nhất được ghi đè tại `logs/last_run.log`; lỗi ngoài dự kiến được ghi
 thêm vào `logs/app_error.log`.
 
+Giao diện tiếng Anh cho phép chọn rõ nguồn **YouTube link** hoặc **Audio file**; chế độ tệp
+hỗ trợ duyệt, nhập đường dẫn và kéo thả. Chọn thư mục lưu bằng **Change…**. Ứng dụng ghi nhớ
+thư mục giữa các lần mở trong `settings.json`; mặc định là `output/` trong thư mục dự án.
+Tệp JSON và MIDI trung gian không bị ghi đè: nếu tên đã tồn tại, ứng dụng thêm hậu tố như
+`(2)` hoặc `(3)`.
+
 ## Dòng lệnh
 
 Script `scripts/mp3_to_json.py` nhận đường dẫn MP3 đầu vào và JSON đầu ra. Có thể chạy qua
@@ -47,6 +53,11 @@ Các tùy chọn hiện có:
 Có thể nhập URL YouTube vào ô nguồn của GUI. Mặc định chỉ chấp nhận `youtube.com`,
 `music.youtube.com` và `youtu.be`; playlist, livestream và video dài hơn 15 phút không được tải.
 Để cập nhật yt-dlp, chạy `.\scripts\dev.ps1 update-ytdlp`.
+Để chẩn đoán tải một liên kết và xem argv, stdout, stderr cùng các tệp được tạo, chạy:
+
+```powershell
+.\scripts\dev.ps1 debug-download "https://www.youtube.com/watch?v=VIDEO_ID"
+```
 
 Ví dụ dùng CUDA và giữ MIDI:
 

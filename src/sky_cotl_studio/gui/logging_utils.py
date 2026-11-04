@@ -61,8 +61,8 @@ def install_exception_hook(log_directory: Path) -> None:
         handler.flush()
         QMessageBox.critical(
             None,
-            "Lỗi ứng dụng",
-            "Ứng dụng gặp lỗi ngoài dự kiến. Chi tiết đã được ghi vào logs/app_error.log.",
+            "Application error",
+            "The application encountered an unexpected error. Details were saved to logs/app_error.log.",
         )
 
     sys.excepthook = handle_exception

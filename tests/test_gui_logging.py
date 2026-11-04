@@ -18,6 +18,8 @@ def test_run_logger_writes_utf8_log_when_stdout_is_none(
     try:
         monkeypatch.setattr(sys, "stdout", None)
         logger.info("Bắt đầu xử lý")
+        logger.info("yt-dlp argv: --print title --no-simulate")
+        logger.error("yt-dlp stderr: Không tìm thấy định dạng tiếng Việt")
         for handler in logger.handlers:
             handler.flush()
     finally:
@@ -29,3 +31,6 @@ def test_run_logger_writes_utf8_log_when_stdout_is_none(
     assert (tmp_path / "last_run.log").read_text(encoding="utf-8").count(
         "Bắt đầu xử lý"
     ) == 1
+    log_content = (tmp_path / "last_run.log").read_text(encoding="utf-8")
+    assert "yt-dlp argv: --print title --no-simulate" in log_content
+    assert "yt-dlp stderr: Không tìm thấy định dạng tiếng Việt" in log_content

@@ -1,12 +1,14 @@
-"""Minimal Vietnamese desktop interface for audio-to-Sky-JSON conversion."""
+"""English desktop interface for audio-to-Sky-JSON conversion."""
 
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
+from PySide6.QtCore import Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,51 +22,62 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from sky_cotl_studio.audio.download import _creation_flags
 from sky_cotl_studio.gui.viewmodel import (
     ConversionForm,
+    SourceMode,
+    SuggestedField,
     build_job_config,
     device_from_label,
-    failure_message_vi,
+    failure_message,
     format_completion_status,
     grid_mode_from_label,
     grid_ms_enabled,
+    switch_source_mode,
+    update_source_title,
     validate_form,
-    youtube_output_suggestion,
 )
-from sky_cotl_studio.pipeline.job import (
-    ConversionJob,
-    JobProgress,
-    JobState,
+from sky_cotl_studio.pipeline.job import ConversionJob, JobProgress, JobState
+from sky_cotl_studio.settings import (
+    DEFAULT_OUTPUT_DIRECTORY,
+    DEFAULT_SETTINGS_PATH,
+    ensure_writable_directory,
+    load_settings,
+    save_settings,
 )
 
-_LOG_DIRECTORY = Path(__file__).resolve().parents[3] / "logs"
-
+_LOG_DIRECTORY = DEFAULT_SETTINGS_PATH.parent / "logs"
 _STATE_LABELS = {
-    JobState.PENDING: "Chờ bắt đầu",
-    JobState.DOWNLOADING: "Đang tải video YouTube",
-    JobState.VALIDATING: "Đang kiểm tra âm thanh",
-    JobState.TRANSCRIBING: "Đang chuyển MP3 thành MIDI",
-    JobState.CONVERTING: "Đang xử lý nốt",
-    JobState.EXPORTING: "Đang xuất JSON",
-    JobState.DONE: "Hoàn tất",
-    JobState.FAILED: "Thất bại",
-    JobState.CANCELLED: "Đã hủy",
+    JobState.PENDING: "Waiting to start",
+    JobState.DOWNLOADING: "Downloading from YouTube",
+    JobState.VALIDATING: "Checking audio",
+    JobState.TRANSCRIBING: "Transcribing audio to MIDI",
+    JobState.CONVERTING: "Converting notes",
+    JobState.EXPORTING: "Saving JSON",
+    JobState.DONE: "Done",
+    JobState.FAILED: "Failed",
+    JobState.CANCELLED: "Cancelled",
 }
+_AUDIO_FILTER = (
+    "Audio files (*.mp3 *.wav *.m4a *.flac *.ogg *.opus *.aac *.wma);;All files (*)"
+)
 
 
-class Mp3PathEdit(QLineEdit):
-    """Line edit that accepts a dropped audio file."""
+class AudioFileEdit(QLineEdit):
+    """Line edit that accepts dropped audio files."""
 
     path_dropped = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setPlaceholderText("Chọn tệp âm thanh hoặc dán liên kết YouTube")
+        self.setPlaceholderText("Choose or drop an audio file")
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -95,46 +108,142 @@ class Mp3PathEdit(QLineEdit):
             event.ignore()
 
 
+class ElidedPathEdit(QLineEdit):
+    """Read-only path field that elides its display while retaining its full path."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.full_path = ""
+
+    def set_full_path(self, path: str | Path) -> None:
+        self.full_path = str(path)
+        self.setToolTip(self.full_path)
+        self._refresh_elided_text()
+
+    def resizeEvent(self, event: object) -> None:
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        self._refresh_elided_text()
+
+    def _refresh_elided_text(self) -> None:
+        available_width = max(0, self.width() - 12)
+        elided = QFontMetrics(self.font()).elidedText(
+            self.full_path,
+            Qt.TextElideMode.ElideMiddle,
+            available_width,
+        )
+        self.setText(elided)
+
+
 class MainWindow(QMainWindow):
-    """Main application window; worker callbacks are relayed through Qt signals."""
+    """Main window; worker callbacks are relayed through a Qt signal."""
 
     progress_received = Signal(object)
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        settings_path: str | Path = DEFAULT_SETTINGS_PATH,
+        default_output_folder: str | Path = DEFAULT_OUTPUT_DIRECTORY,
+        log_directory: str | Path = _LOG_DIRECTORY,
+    ) -> None:
         super().__init__()
+        self._settings_path = Path(settings_path)
+        self._default_output_folder = Path(default_output_folder).resolve()
+        self._log_directory = Path(log_directory)
         self._job: ConversionJob | None = None
         self._run_logger: logging.Logger | None = None
+        self._title_suggestion = SuggestedField()
+        self._settings_warning: str | None = None
+        self._folder_reminder: str | None = None
+        self.output_directory = self._load_output_directory()
         self._build_ui()
         self.progress_received.connect(self._handle_progress)
+        self._start_run_log()
+        if self._settings_warning:
+            self._log_warning(self._settings_warning)
+
+    def _load_output_directory(self) -> Path:
+        settings = load_settings(self._settings_path, self._default_output_folder)
+        if settings.warning:
+            self._settings_warning = settings.warning
+        try:
+            return ensure_writable_directory(settings.output_directory)
+        except (OSError, ValueError) as error:
+            self._settings_warning = (
+                f"Could not use saved output folder {settings.output_directory}: {error}"
+            )
+            self._folder_reminder = (
+                "The saved output folder is unavailable. Using the default output folder."
+            )
+            try:
+                return ensure_writable_directory(self._default_output_folder)
+            except (OSError, ValueError) as fallback_error:
+                self._settings_warning += f"; default output folder also failed: {fallback_error}"
+                self._folder_reminder = (
+                    "The saved output folder is unavailable, and the default output folder "
+                    "could not be created."
+                )
+                return self._default_output_folder
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Sky CotL — Âm thanh sang JSON")
+        self.setWindowTitle("Sky CotL — Audio to JSON")
         self.setMinimumSize(520, 360)
-        self.resize(600, 400)
+        self.resize(620, 420)
 
         central_widget = QWidget(self)
         layout = QVBoxLayout(central_widget)
         form_layout = QFormLayout()
 
-        self.input_path_edit = Mp3PathEdit()
-        input_row = QHBoxLayout()
-        input_row.addWidget(self.input_path_edit)
-        input_browse_button = QPushButton("Chọn tệp…")
-        input_browse_button.clicked.connect(self._browse_mp3)
-        input_row.addWidget(input_browse_button)
-        form_layout.addRow("Tệp âm thanh hoặc liên kết YouTube:", input_row)
+        self.youtube_radio = QRadioButton("YouTube link")
+        self.audio_radio = QRadioButton("Audio file")
+        self.youtube_radio.setChecked(True)
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.youtube_radio)
+        source_row.addWidget(self.audio_radio)
+        source_row.addStretch()
+        form_layout.addRow("Source:", source_row)
 
-        self.output_path_edit = QLineEdit()
-        self.output_path_edit.setPlaceholderText("Đường dẫn JSON đầu ra")
+        self.source_stack = QStackedWidget()
+        youtube_page = QWidget()
+        youtube_row = QHBoxLayout(youtube_page)
+        youtube_row.setContentsMargins(0, 0, 0, 0)
+        self.youtube_link_edit = QLineEdit()
+        self.youtube_link_edit.setPlaceholderText("Paste a YouTube link")
+        self.youtube_link_edit.textEdited.connect(self._source_edited)
+        youtube_row.addWidget(self.youtube_link_edit)
+        self.paste_button = QPushButton("Paste")
+        self.paste_button.clicked.connect(self._paste_link)
+        youtube_row.addWidget(self.paste_button)
+
+        audio_page = QWidget()
+        audio_row = QHBoxLayout(audio_page)
+        audio_row.setContentsMargins(0, 0, 0, 0)
+        self.audio_file_edit = AudioFileEdit()
+        self.audio_file_edit.textEdited.connect(self._source_edited)
+        self.audio_file_edit.path_dropped.connect(self._source_edited)
+        audio_row.addWidget(self.audio_file_edit)
+        self.browse_button = QPushButton("Browse…")
+        self.browse_button.clicked.connect(self._browse_audio)
+        audio_row.addWidget(self.browse_button)
+        self.source_stack.addWidget(youtube_page)
+        self.source_stack.addWidget(audio_page)
+        self.source_label = QLabel("YouTube link:")
+        form_layout.addRow(self.source_label, self.source_stack)
+        self.youtube_radio.toggled.connect(self._source_mode_changed)
+        self.audio_radio.toggled.connect(self._source_mode_changed)
+
         output_row = QHBoxLayout()
-        output_row.addWidget(self.output_path_edit)
-        output_browse_button = QPushButton("Lưu JSON…")
-        output_browse_button.clicked.connect(self._browse_json)
-        output_row.addWidget(output_browse_button)
-        form_layout.addRow("Lưu JSON tại:", output_row)
+        self.output_folder_edit = ElidedPathEdit()
+        self.output_folder_edit.set_full_path(self.output_directory)
+        output_row.addWidget(self.output_folder_edit)
+        self.change_output_button = QPushButton("Change…")
+        self.change_output_button.clicked.connect(self._change_output_folder)
+        output_row.addWidget(self.change_output_button)
+        form_layout.addRow("Output folder:", output_row)
 
         self.grid_mode_combo = QComboBox()
-        self.grid_mode_combo.addItems(["Tự động", "Cố định"])
+        self.grid_mode_combo.addItems(["Automatic", "Fixed"])
         self.grid_ms_spin = QDoubleSpinBox()
         self.grid_ms_spin.setRange(1.0, 10000.0)
         self.grid_ms_spin.setDecimals(2)
@@ -145,30 +254,39 @@ class MainWindow(QMainWindow):
         grid_row = QHBoxLayout()
         grid_row.addWidget(self.grid_mode_combo)
         grid_row.addWidget(self.grid_ms_spin)
-        form_layout.addRow("Lưới thời gian:", grid_row)
+        form_layout.addRow("Time grid:", grid_row)
 
         self.device_combo = QComboBox()
-        self.device_combo.addItems(["Tự động", "CUDA", "CPU"])
-        form_layout.addRow("Thiết bị:", self.device_combo)
+        self.device_combo.addItems(["Automatic", "CUDA", "CPU"])
+        form_layout.addRow("Device:", self.device_combo)
 
         self.title_edit = QLineEdit()
+        self.title_edit.setPlaceholderText("Song title")
+        self.title_edit.textEdited.connect(self._title_suggestion.set_by_user)
         self.author_edit = QLineEdit()
         self.transcribed_by_edit = QLineEdit()
-        form_layout.addRow("Tên bài:", self.title_edit)
-        form_layout.addRow("Tác giả:", self.author_edit)
-        form_layout.addRow("Người chép:", self.transcribed_by_edit)
+        form_layout.addRow("Song title:", self.title_edit)
+        form_layout.addRow("Author:", self.author_edit)
+        form_layout.addRow("Transcribed by:", self.transcribed_by_edit)
 
-        self.keep_midi_checkbox = QCheckBox("Giữ tệp MIDI trung gian")
+        self.keep_midi_checkbox = QCheckBox("Keep intermediate MIDI file")
         form_layout.addRow("", self.keep_midi_checkbox)
         layout.addLayout(form_layout)
 
+        self.folder_reminder_label = QLabel("")
+        self.folder_reminder_label.setWordWrap(True)
+        self.folder_reminder_label.setVisible(bool(self._folder_reminder))
+        if self._folder_reminder:
+            self.folder_reminder_label.setText(self._folder_reminder)
+        layout.addWidget(self.folder_reminder_label)
+
         controls = QHBoxLayout()
-        self.start_button = QPushButton("Bắt đầu")
+        self.start_button = QPushButton("Start")
         self.start_button.clicked.connect(self._start_job)
-        self.cancel_button = QPushButton("Hủy")
+        self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self._cancel_job)
-        self.open_folder_button = QPushButton("Mở thư mục chứa file")
+        self.open_folder_button = QPushButton("Open folder")
         self.open_folder_button.setEnabled(False)
         self.open_folder_button.clicked.connect(self._open_output_folder)
         controls.addWidget(self.start_button)
@@ -186,39 +304,87 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central_widget)
         self.adjustSize()
+        self.open_folder_button.setEnabled(True)
 
-    def _update_grid_ms_enabled(self, label: str) -> None:
-        grid_mode = grid_mode_from_label(label)
-        self.grid_ms_spin.setEnabled(grid_ms_enabled(grid_mode))
+    def _source_mode(self) -> SourceMode:
+        return "youtube" if self.youtube_radio.isChecked() else "file"
 
-    def _browse_mp3(self) -> None:
+    def _source_mode_changed(self) -> None:
+        if self.youtube_radio.isChecked():
+            self.source_stack.setCurrentIndex(0)
+            self.source_label.setText("YouTube link:")
+        elif self.audio_radio.isChecked():
+            self.source_stack.setCurrentIndex(1)
+            self.source_label.setText("Audio file:")
+        else:
+            return
+        self.youtube_link_edit.clear()
+        self.audio_file_edit.clear()
+        self.title_edit.setText(switch_source_mode(self._title_suggestion))
+
+    def _active_source_edit(self) -> QLineEdit:
+        return self.youtube_link_edit if self._source_mode() == "youtube" else self.audio_file_edit
+
+    def _source_edited(self, source: str) -> None:
+        self.title_edit.setText(
+            update_source_title(source, self._source_mode(), self._title_suggestion)
+        )
+
+    def _paste_link(self) -> None:
+        self.youtube_link_edit.setText(self._clipboard().text())
+        self._source_edited(self.youtube_link_edit.text())
+
+    def _clipboard(self):
+        from PySide6.QtWidgets import QApplication
+
+        return QApplication.clipboard()
+
+    def _browse_audio(self) -> None:
         path, _selected_filter = QFileDialog.getOpenFileName(
             self,
-            "Chọn tệp âm thanh",
+            "Choose an audio file",
             "",
-            "Tệp âm thanh (*.mp3 *.wav *.m4a *.flac *.ogg *.opus *.aac *.wma);;Tất cả tệp (*)",
+            _AUDIO_FILTER,
         )
         if path:
-            self.input_path_edit.setText(path)
-            if not self.output_path_edit.text().strip():
-                self.output_path_edit.setText(str(Path(path).with_suffix(".json")))
-            if not self.title_edit.text().strip():
-                self.title_edit.setText(Path(path).stem)
+            self.audio_file_edit.setText(path)
+            self._source_edited(path)
 
-    def _browse_json(self) -> None:
-        path, _selected_filter = QFileDialog.getSaveFileName(
+    def _change_output_folder(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
             self,
-            "Lưu JSON",
-            self.output_path_edit.text(),
-            "Tệp JSON (*.json)",
+            "Choose output folder",
+            str(self.output_directory),
         )
-        if path:
-            self.output_path_edit.setText(path)
+        if not selected:
+            return
+        try:
+            directory = ensure_writable_directory(selected)
+            save_settings(self._settings_path, directory)
+        except (OSError, ValueError) as error:
+            self._show_error(
+                "Cannot write to the output folder",
+                "Cannot write to the output folder. Choose another folder.",
+                str(error),
+            )
+            self._log_error("Could not save output folder: %s", error)
+            return
+        self.output_directory = directory
+        self.output_folder_edit.set_full_path(directory)
+        self.folder_reminder_label.clear()
+        self.folder_reminder_label.setVisible(False)
+        self.open_folder_button.setEnabled(True)
+
+    def _update_grid_ms_enabled(self, label: str) -> None:
+        self.grid_ms_spin.setEnabled(
+            grid_ms_enabled(grid_mode_from_label(label))
+        )
 
     def _form(self) -> ConversionForm:
         return ConversionForm(
-            input_mp3=self.input_path_edit.text(),
-            output_json=self.output_path_edit.text(),
+            source_mode=self._source_mode(),
+            input_source=self._active_source_edit().text(),
+            output_folder=str(self.output_directory),
             grid_mode=grid_mode_from_label(self.grid_mode_combo.currentText()),
             grid_ms=str(self.grid_ms_spin.value()),
             device=device_from_label(self.device_combo.currentText()),
@@ -230,26 +396,28 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _start_job(self) -> None:
+        self._start_run_log()
         try:
-            form = self._form()
-        except ValueError as error:
-            QMessageBox.warning(self, "Thông tin chưa hợp lệ", str(error))
-            return
-        errors = validate_form(form)
-        if errors:
-            QMessageBox.warning(
-                self,
-                "Thông tin chưa hợp lệ",
-                "\n".join(errors),
+            self.output_directory = ensure_writable_directory(self.output_directory)
+        except (OSError, ValueError) as error:
+            self._log_error("Output folder is not writable: %s", error)
+            self._show_error(
+                "Cannot write to the output folder",
+                "Cannot write to the output folder. Choose another folder.",
+                str(error),
             )
+            return
+        form = self._form()
+        errors = validate_form(form, require_input_exists=form.source_mode == "file")
+        if errors:
+            self._show_error("Invalid input", "\n".join(errors))
             return
 
         self.open_folder_button.setEnabled(False)
         try:
             config = build_job_config(form)
-            self._start_run_log()
             self._log_info(
-                "Bắt đầu chuyển đổi: %s",
+                "Starting conversion: %s",
                 config.input_url or config.input_path,
             )
             job = ConversionJob(
@@ -257,17 +425,13 @@ class MainWindow(QMainWindow):
                 progress_callback=self.progress_received.emit,
             )
             job.start()
-        except (OSError, RuntimeError, TypeError, ValueError):
-            self._log_exception("Không thể bắt đầu tác vụ chuyển đổi")
-            QMessageBox.critical(
-                self,
-                "Không thể bắt đầu",
-                "Không thể khởi chạy tác vụ chuyển đổi.",
-            )
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            self._log_exception("Could not start conversion")
+            self._show_error("Invalid input", "Could not start the conversion.", str(error))
             return
 
         self._job = job
-        self.start_button.setEnabled(False)
+        self._set_inputs_enabled(False)
         self.cancel_button.setEnabled(True)
         if config.input_url is not None:
             self.progress_bar.setRange(0, 100)
@@ -277,23 +441,48 @@ class MainWindow(QMainWindow):
             self.progress_bar.setRange(0, 0)
             self.status_label.setText(_STATE_LABELS[JobState.VALIDATING])
 
+    def _set_inputs_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self.youtube_radio,
+            self.audio_radio,
+            self.youtube_link_edit,
+            self.paste_button,
+            self.audio_file_edit,
+            self.browse_button,
+            self.change_output_button,
+            self.grid_mode_combo,
+            self.grid_ms_spin,
+            self.device_combo,
+            self.title_edit,
+            self.author_edit,
+            self.transcribed_by_edit,
+            self.keep_midi_checkbox,
+            self.start_button,
+            self.open_folder_button,
+        ):
+            widget.setEnabled(enabled)
+
     @Slot()
     def _cancel_job(self) -> None:
         if self._job is not None:
             self._job.cancel()
             self.cancel_button.setEnabled(False)
-            self._log_info("Đã yêu cầu hủy tác vụ.")
+            self._log_info("Cancellation requested.")
 
     @Slot(object)
     def _handle_progress(self, event: object) -> None:
         if not isinstance(event, JobProgress):
             return
         self.status_label.setText(_STATE_LABELS[event.phase])
-        if event.title:
-            if not self.title_edit.text().strip():
-                self.title_edit.setText(event.title)
-            if not self.output_path_edit.text().strip():
-                self.output_path_edit.setText(youtube_output_suggestion(event.title))
+        if event.title and self._source_mode() == "youtube":
+            self.title_edit.setText(
+                update_source_title(
+                    self.youtube_link_edit.text(),
+                    "youtube",
+                    self._title_suggestion,
+                    video_title=event.title,
+                )
+            )
         if event.phase is JobState.DOWNLOADING:
             if event.percentage is None:
                 if self.progress_bar.maximum() != 100:
@@ -310,7 +499,7 @@ class MainWindow(QMainWindow):
         if event.phase in (JobState.DONE, JobState.FAILED, JobState.CANCELLED):
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(1 if event.phase is JobState.DONE else 0)
-            self.start_button.setEnabled(True)
+            self._set_inputs_enabled(True)
             self.cancel_button.setEnabled(False)
             self._show_terminal_result(event.phase)
 
@@ -319,37 +508,57 @@ class MainWindow(QMainWindow):
         if job is None:
             return
         if state is JobState.DONE and job.result is not None:
-            self.status_label.setText(
-                format_completion_status(job.result.conversion)
-            )
-            self._log_info("Kết quả: %s", self.status_label.text())
+            self.status_label.setText(format_completion_status(job.result.json_path))
+            self._log_info("Saved JSON: %s", job.result.json_path)
             self.open_folder_button.setEnabled(True)
         elif state is JobState.FAILED and job.failure is not None:
             self._log_error(
-                "Chuyển đổi thất bại: %s",
+                "Conversion failed: %s",
                 job.failure.technical_cause,
             )
-            QMessageBox.critical(
-                self,
-                "Chuyển đổi thất bại",
-                failure_message_vi(job.failure.user_message),
+            self._show_error(
+                "Conversion failed",
+                failure_message(job.failure.user_message),
+                job.failure.details,
             )
         elif state is JobState.CANCELLED:
-            self._log_info("Tác vụ đã bị hủy.")
+            self.status_label.setText(_STATE_LABELS[JobState.CANCELLED])
+            self._log_info("Conversion cancelled.")
 
     def _open_output_folder(self) -> None:
-        if self._job is not None and self._job.result is not None:
-            folder = self._job.result.json_path.parent
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        result = self._job.result if self._job is not None else None
+        if result is not None and os.name == "nt":
+            try:
+                subprocess.Popen(
+                    ["explorer.exe", "/select,", str(result.json_path)],
+                    creationflags=_creation_flags(),
+                )
+                return
+            except OSError as error:
+                self._log_warning("Could not select the output file in Explorer: %s", error)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.output_directory)))
+
+    def _show_error(self, title: str, message: str, details: str = "") -> None:
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Critical)
+        dialog.setWindowTitle(title)
+        dialog.setText(message)
+        dialog.setDetailedText(details)
+        dialog.exec()
 
     def _start_run_log(self) -> None:
-        from sky_cotl_studio.gui.logging_utils import create_run_logger
+        if self._run_logger is None:
+            from sky_cotl_studio.gui.logging_utils import create_run_logger
 
-        self._run_logger = create_run_logger(_LOG_DIRECTORY)
+            self._run_logger = create_run_logger(self._log_directory)
 
     def _log_info(self, message: str, *args: object) -> None:
         if self._run_logger is not None:
             self._run_logger.info(message, *args)
+
+    def _log_warning(self, message: str, *args: object) -> None:
+        if self._run_logger is not None:
+            self._run_logger.warning(message, *args)
 
     def _log_error(self, message: str, *args: object) -> None:
         if self._run_logger is not None:

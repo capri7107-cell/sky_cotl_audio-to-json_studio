@@ -147,6 +147,12 @@ Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
 
 ## 7. Quy tắc làm việc
 
+- Giao diện hoàn toàn bằng tiếng Anh; giao tiếp với người dùng (báo cáo của agent) bằng tiếng Việt.
+- Chỉ import `PySide6` bên trong `gui/`; các module thuần Python như `settings.py`,
+  `pipeline/output.py` và `gui/viewmodel.py` không phụ thuộc Qt.
+- GUI dùng `settings.json` ở thư mục gốc dự án (UTF-8, có version) để nhớ thư mục lưu.
+  Mặc định lưu vào `output/`; tên tệp được làm sạch theo quy tắc Windows và không ghi đè
+  tệp JSON/MIDI đã có, thêm hậu tố `(2)`, `(3)` khi cần. CLI không đọc `settings.json`.
 - Mỗi lần chỉ làm **một bước** trong `PLAN.md`. Xong bước nào thì chạy test của bước đó rồi dừng.
 - Viết test trước hoặc cùng lúc với code. Không merge code của `midi`, `converter`, `exporters`
   nếu chưa có test.
@@ -163,7 +169,8 @@ Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
 
 - Interpreter duy nhất: `D:\My Folder\Environment\pytorch-env\Scripts\python.exe`.
 - Không gọi `py`, `python`, `pip` trần. Mọi lệnh chạy qua `scripts/dev.ps1`:
-  `./scripts/dev.ps1 install | test | lint | types | all`
+  `./scripts/dev.ps1 install | test | lint | types | all`; chẩn đoán tải YouTube dùng
+  `./scripts/dev.ps1 debug-download <URL>`.
 - Không dùng `pip install --upgrade` trong môi trường này, ngoại trừ lệnh `update-ytdlp`
   trong `scripts/dev.ps1` để chạy `pip install -U yt-dlp[default]`. Sau khi cài/cập nhật gói,
   lệnh wrapper chạy `pip check`.

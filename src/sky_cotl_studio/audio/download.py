@@ -13,14 +13,15 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 DEFAULT_YOUTUBE_DOMAINS = (
     "youtube.com",
-    "music.youtube.com",
+    "youtube-nocookie.com",
     "youtu.be",
 )
 _PERCENTAGE_PATTERN = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d+)?)%")
+_TITLE_MARKER = "SKYCOTL_TITLE="
 _STREAM_END = object()
 
 
@@ -33,24 +34,33 @@ class DownloadError(Exception):
         *,
         category: str = "unknown",
         output: str = "",
+        argv: tuple[str, ...] = (),
+        stderr: str = "",
     ) -> None:
         super().__init__(message)
         self.category = category
         self.output = output
+        self.argv = argv
+        self.stderr = stderr
 
 
 class InvalidYouTubeUrlError(DownloadError):
     """The source is not an allowed HTTP(S) YouTube URL."""
 
-    def __init__(self, message: str = "Liên kết YouTube không hợp lệ hoặc không được hỗ trợ.") -> None:
-        super().__init__(message, category="invalid_url")
+    def __init__(
+        self,
+        message: str = "Only YouTube links are supported.",
+        *,
+        category: str = "invalid_url",
+    ) -> None:
+        super().__init__(message, category=category)
 
 
 class DownloadCancelledError(DownloadError):
     """The yt-dlp process tree was stopped at the user's request."""
 
     def __init__(self) -> None:
-        super().__init__("Tải video đã bị hủy.", category="cancelled")
+        super().__init__("The download was cancelled.", category="cancelled")
 
 
 @dataclass(frozen=True)
@@ -60,6 +70,7 @@ class DownloadProgress:
     percentage: float | None = None
     message: str = ""
     title: str | None = None
+    stream: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,9 +79,53 @@ class DownloadResult:
 
     audio_path: Path
     title: str
+    argv: tuple[str, ...] = ()
+    stdout: str = ""
+    stderr: str = ""
+
+
+def sanitize_video_title(title: str) -> str:
+    """Remove control characters and cap a displayable title at 120 characters."""
+    return "".join(character for character in title if character.isprintable()).strip()[
+        :120
+    ]
 
 
 ProgressCallback = Callable[[DownloadProgress], None]
+
+
+def build_download_command(
+    url: str,
+    temporary_directory: str | Path,
+    *,
+    max_duration_seconds: float = 900,
+    allowed_domains: Iterable[str] = DEFAULT_YOUTUBE_DOMAINS,
+) -> list[str]:
+    """Build the exact yt-dlp argv used by the downloader."""
+    validated_url = validate_youtube_url(url, allowed_domains)
+    if max_duration_seconds <= 0 or not float(max_duration_seconds).is_integer():
+        raise ValueError("max_duration_seconds must be a positive whole number")
+    output_template = str(Path(temporary_directory) / "source.%(ext)s")
+    return [
+        _child_python_executable(),
+        "-m",
+        "yt_dlp",
+        "--no-playlist",
+        "-x",
+        "--audio-format",
+        "wav",
+        "--newline",
+        "--match-filter",
+        f"!is_live & duration <= {max_duration_seconds:g}",
+        "--no-simulate",
+        "--progress",
+        "--print",
+        f"{_TITLE_MARKER}%(title)s",
+        "-o",
+        output_template,
+        "--",
+        validated_url,
+    ]
 
 
 def validate_youtube_url(
@@ -78,24 +133,118 @@ def validate_youtube_url(
     allowed_domains: Iterable[str] = DEFAULT_YOUTUBE_DOMAINS,
 ) -> str:
     """Validate a URL against the configured scheme and exact hostname allowlist."""
-    candidate = url.strip()
+    candidate = _trim_url_wrapping(url)
     if not candidate or candidate.startswith("-"):
         raise InvalidYouTubeUrlError
+    if (
+        not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", candidate)
+        and _looks_like_domain_prefix(candidate)
+    ):
+        candidate = f"https://{candidate}"
     try:
         parsed = urlsplit(candidate)
         hostname = parsed.hostname
+        port = parsed.port
     except ValueError as error:
-        raise InvalidYouTubeUrlError from error
-    allowed = {domain.strip().lower().rstrip(".") for domain in allowed_domains}
-    if (
-        parsed.scheme.lower() not in ("http", "https")
-        or not hostname
-        or hostname.lower().rstrip(".") not in allowed
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
+        raise InvalidYouTubeUrlError(
+            "This link is not formatted correctly.",
+            category="invalid_format",
+        ) from error
+    if parsed.scheme.lower() not in ("http", "https"):
         raise InvalidYouTubeUrlError
+    if not hostname:
+        raise InvalidYouTubeUrlError(
+            "This link is not formatted correctly.",
+            category="invalid_format",
+        )
+    if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        raise InvalidYouTubeUrlError(
+            "This link is not formatted correctly.",
+            category="invalid_format",
+        )
+    normalized_host = hostname.lower().rstrip(".")
+    normalized_domains = {
+        domain.strip().lower().rstrip(".") for domain in allowed_domains
+    }
+    if not _is_allowed_youtube_host(normalized_host, normalized_domains):
+        raise InvalidYouTubeUrlError
+
+    video_id = _video_id(parsed.path, parsed.query, normalized_host)
+    if video_id is None:
+        raise InvalidYouTubeUrlError(
+            "This link has no video ID.",
+            category="missing_video_id",
+        )
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", video_id):
+        raise InvalidYouTubeUrlError(
+            "This link is not formatted correctly.",
+            category="invalid_format",
+        )
+    netloc = normalized_host if port is None else f"{normalized_host}:{port}"
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            netloc,
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+
+
+def _trim_url_wrapping(url: str) -> str:
+    candidate = url.strip()
+    if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in "\"'":
+        candidate = candidate[1:-1].strip()
     return candidate
+
+
+def _looks_like_domain_prefix(value: str) -> bool:
+    known_youtube_host = re.match(
+        r"^(?:[A-Za-z0-9-]+\.)*(?:youtube\.com|youtube-nocookie\.com|youtu\.be)(?:[/:?#]|$)",
+        value,
+        flags=re.IGNORECASE,
+    )
+    generic_domain_with_path = re.match(
+        r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}[/:?#]",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return known_youtube_host is not None or generic_domain_with_path is not None
+
+
+def _is_allowed_youtube_host(hostname: str, domains: set[str]) -> bool:
+    if hostname == "youtu.be":
+        return "youtu.be" in domains
+    for domain in ("youtube.com", "youtube-nocookie.com"):
+        if domain in domains and (
+            hostname == domain or hostname.endswith(f".{domain}")
+        ):
+            return True
+    for domain in domains - {"youtube.com", "youtube-nocookie.com", "youtu.be"}:
+        if hostname == domain or hostname.endswith(f".{domain}"):
+            return True
+    return False
+
+
+def _video_id(path: str, query: str, hostname: str) -> str | None:
+    segments = [segment for segment in path.split("/") if segment]
+    query_values = parse_qs(query, keep_blank_values=True)
+    if hostname == "youtu.be":
+        return segments[0] if segments else None
+    if not segments and query_values.get("v"):
+        return query_values["v"][0] or None
+    if segments == ["watch"]:
+        values = query_values.get("v")
+        return values[0] or None if values else None
+    if segments and segments[0].lower() in ("shorts", "embed", "live", "v"):
+        return segments[1] if len(segments) > 1 else None
+    if not segments or segments == ["watch"]:
+        return None
+    raise InvalidYouTubeUrlError(
+        "This link is not formatted correctly.",
+        category="invalid_format",
+    )
 
 
 def parse_download_percentage(line: str) -> float | None:
@@ -105,26 +254,6 @@ def parse_download_percentage(line: str) -> float | None:
         return None
     percentage = float(match.group(1))
     return percentage if 0.0 <= percentage <= 100.0 else None
-
-
-def safe_video_filename(title: str) -> str:
-    """Make a video title safe as a Windows-compatible filename stem."""
-    sanitized = "".join(
-        "_" if character in '<>:"/\\|?*' or ord(character) < 32 else character
-        for character in title
-    ).strip().rstrip(". ")
-    if not sanitized or sanitized in (".", ".."):
-        return "youtube-video"
-    if sanitized.upper().split(".", maxsplit=1)[0] in {
-        "CON",
-        "PRN",
-        "AUX",
-        "NUL",
-        *(f"COM{index}" for index in range(1, 10)),
-        *(f"LPT{index}" for index in range(1, 10)),
-    }:
-        sanitized = f"_{sanitized}"
-    return sanitized
 
 
 def download_youtube(
@@ -137,38 +266,29 @@ def download_youtube(
     cancel_event: threading.Event | None = None,
 ) -> DownloadResult:
     """Download a YouTube URL as WAV into a caller-owned temporary directory."""
-    validated_url = validate_youtube_url(url, allowed_domains)
-    if max_duration_seconds <= 0 or not float(max_duration_seconds).is_integer():
-        raise ValueError("max_duration_seconds must be a positive whole number")
+    command = build_download_command(
+        url,
+        temporary_directory,
+        max_duration_seconds=max_duration_seconds,
+        allowed_domains=allowed_domains,
+    )
     if cancel_event is not None and cancel_event.is_set():
         raise DownloadCancelledError
 
     directory = Path(temporary_directory)
     directory.mkdir(parents=True, exist_ok=True)
     output_path = directory / "source.wav"
-    output_template = str(directory / "source.%(ext)s")
-    command = [
-        _child_python_executable(),
-        "-m",
-        "yt_dlp",
-        "--no-playlist",
-        "-x",
-        "--audio-format",
-        "wav",
-        "--newline",
-        "--match-filter",
-        f"!is_live & duration <= {max_duration_seconds:g}",
-        "--print",
-        "title",
-        "-o",
-        output_template,
-        "--",
-        validated_url,
-    ]
     environment = os.environ.copy()
     environment["PYTHONUTF8"] = "1"
     environment["PYTHONIOENCODING"] = "utf-8"
     try:
+        if progress_callback is not None:
+            progress_callback(
+                DownloadProgress(
+                    message=f"yt-dlp argv: {subprocess.list2cmdline(command)}",
+                    stream="command",
+                )
+            )
         process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
@@ -184,13 +304,14 @@ def download_youtube(
         )
     except OSError as error:
         raise DownloadError(
-            f"Không thể khởi chạy yt-dlp: {error}",
-            category="unknown",
+            f"Could not launch yt-dlp: {error}",
+            category="process_start",
             output=str(error),
+            argv=tuple(command),
         ) from error
 
     try:
-        output, title = _read_process_output(
+        output, title, stdout, stderr = _read_process_output(
             process,
             progress_callback=progress_callback,
             cancel_event=cancel_event,
@@ -199,17 +320,27 @@ def download_youtube(
         if return_code != 0:
             category = _classify_download_failure(output)
             raise DownloadError(
-                f"yt-dlp kết thúc với mã {return_code}: {output[-4000:]}",
-                category=category,
+                f"yt-dlp exited with code {return_code}.",
+                category="process_exit" if category == "unknown" else category,
                 output=output,
+                argv=tuple(command),
+                stderr=stderr,
             )
         if not output_path.is_file() or output_path.stat().st_size == 0:
             raise DownloadError(
-                "yt-dlp hoàn tất nhưng không tạo được tệp WAV.",
-                category="unknown",
+                "yt-dlp finished but no audio file was created.",
+                category="missing_output",
                 output=output,
+                argv=tuple(command),
+                stderr=stderr,
             )
-        return DownloadResult(audio_path=output_path, title=title.strip())
+        return DownloadResult(
+            audio_path=output_path,
+            title=title.strip(),
+            argv=tuple(command),
+            stdout=stdout,
+            stderr=stderr,
+        )
     except DownloadCancelledError:
         _terminate_process_tree(process)
         _remove_partial_downloads(directory)
@@ -225,7 +356,7 @@ def _read_process_output(
     *,
     progress_callback: ProgressCallback | None,
     cancel_event: threading.Event | None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str, str]:
     messages: queue.Queue[tuple[str, str] | tuple[str, object]] = queue.Queue()
     streams: tuple[tuple[str, IO[str] | None], ...] = (
         ("stdout", process.stdout),
@@ -252,6 +383,8 @@ def _read_process_output(
         reader.start()
 
     lines: list[str] = []
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
     title = ""
     ended_streams = 0
     while ended_streams < len(readers):
@@ -269,9 +402,15 @@ def _read_process_output(
         line = str(line_or_end)
         if line:
             lines.append(line)
-        parsed_title = line.strip() if stream_name == "stdout" else ""
-        if parsed_title and not title:
-            title = parsed_title
+            if stream_name == "stderr":
+                stderr_lines.append(line)
+            else:
+                stdout_lines.append(line)
+        parsed_title = ""
+        if stream_name == "stdout" and line.startswith(_TITLE_MARKER):
+            parsed_title = sanitize_video_title(line[len(_TITLE_MARKER) :].strip())
+            if parsed_title and not title:
+                title = parsed_title
         percentage = parse_download_percentage(line)
         if progress_callback is not None and (line or parsed_title):
             progress_callback(
@@ -279,11 +418,17 @@ def _read_process_output(
                     percentage=percentage,
                     message=line,
                     title=parsed_title or None,
+                    stream=stream_name,
                 )
             )
     for reader in readers:
         reader.join(timeout=1)
-    return "\n".join(lines), title
+    return (
+        "\n".join(lines),
+        title,
+        "\n".join(stdout_lines),
+        "\n".join(stderr_lines),
+    )
 
 
 def _classify_download_failure(output: str) -> str:
@@ -398,6 +543,6 @@ __all__ = [
     "InvalidYouTubeUrlError",
     "download_youtube",
     "parse_download_percentage",
-    "safe_video_filename",
+    "sanitize_video_title",
     "validate_youtube_url",
 ]

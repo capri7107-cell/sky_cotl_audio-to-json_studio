@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("install", "update-ytdlp", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app", "app-silent", "fidelity")]
+    [ValidateSet("install", "update-ytdlp", "test", "test-gpu", "lint", "types", "all", "convert", "compare", "mp3", "app", "app-silent", "fidelity", "debug-download")]
     [string]$Task,
     [Parameter(Position = 1)]
     [string]$InputPath,
@@ -115,6 +115,16 @@ switch ($Task) {
             $fidelityArguments += $ExtraArguments
         }
         Invoke-PythonScript $fidelityArguments
+    }
+    "debug-download" {
+        $debugArguments = @("scripts/debug_download.py")
+        if ($InputPath) {
+            $debugArguments += $InputPath
+        }
+        if ($ExtraArguments) {
+            $debugArguments += $ExtraArguments
+        }
+        Invoke-PythonScript $debugArguments
     }
     "mp3" {
         if (-not $InputPath -or -not $OutputPath) {

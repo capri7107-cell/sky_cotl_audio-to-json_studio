@@ -10,7 +10,9 @@ __pycache__/
 
 # Project outputs
 out/
+output/
 logs/
+settings.json
 
 # Virtual environments
 .venv/
