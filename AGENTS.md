@@ -126,7 +126,17 @@ Kiểm chứng trên fixtures: bảy nốt đầu của `Summertime.json` (G5 G5
 khi dịch **−2 semitone** (bài gốc ở D trưởng, dịch về C trưởng). Chỉ lệch ở nốt thứ 6: MIDI cho 76, JSON ứng với 78.
 Chưa rõ đó là lỗi của Transkun hay do bản chép tay.
 
-## 6. Quyết định còn mở (đừng tự chốt, hãy để cấu hình được)
+## 6. Quyết định
+
+Đã chốt:
+
+- `grid_outliers="snap"` là mặc định. `keep` chỉ là tùy chọn dòng lệnh, không đưa lên GUI,
+  vì thử nghe trên Imagine Dragons không phân biệt được hai chế độ.
+- Ngưỡng “lệch quá 40 ms” trong `fidelity` chỉ là số liệu tham khảo, không dùng làm tiêu chí
+  chọn chế độ lưới.
+- Không thêm thuật toán lưới mới trừ khi có bằng chứng nghe được.
+
+### Quyết định còn mở (đừng tự chốt, hãy để cấu hình được)
 
 | Vấn đề | Cách xử lý tạm |
 |---|---|
